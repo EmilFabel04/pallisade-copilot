@@ -1,6 +1,7 @@
 import type { ArtefactRow } from '@/types/artefact-row';
 import { GenericArtifactPreview } from './GenericArtifactPreview';
 import { PRArtifactPreview } from './PRArtifactPreview';
+import { MonitorArtifactPreview } from './MonitorArtifactPreview';
 
 export function ArtefactPreview({ artefact }: { artefact: ArtefactRow }) {
   switch (artefact.kind) {
@@ -12,6 +13,8 @@ export function ArtefactPreview({ artefact }: { artefact: ArtefactRow }) {
         return <PRArtifactPreview artefact={artefact} />;
       }
       return <GenericArtifactPreview artefact={artefact} />;
+    case 'MONITOR':
+      return <MonitorArtifactPreview artefact={artefact} />;
     default:
       return <GenericArtifactPreview artefact={artefact} />;
   }
