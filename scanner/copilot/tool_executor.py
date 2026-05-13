@@ -1484,7 +1484,11 @@ class ToolExecutor:
             and getattr(result, "success", False)
         ):
             try:
-                await self._emit_for_tool(tool, args, result)
+                emitted_artefact = await self._emit_for_tool(tool, args, result)
+                if emitted_artefact is not None and isinstance(result, ToolResult):
+                    result.stream_events.append(
+                        self._build_typed_artefact_event(emitted_artefact, tool.name)
+                    )
             except Exception as e:
                 logger.warning(f"[AutoEmit] Failed to emit artefact for tool '{tool.name}': {e}")
 
@@ -1508,14 +1512,23 @@ class ToolExecutor:
             return "DAG"
         return "PR_CHANGE"
 
-    async def _emit_for_tool(self, tool: Tool, args: Dict[str, Any], result: ToolResult) -> None:
-        """Persist an artefact row for a tool that declares an artifact_spec."""
+    async def _emit_for_tool(
+        self,
+        tool: Tool,
+        args: Dict[str, Any],
+        result: ToolResult,
+    ) -> Optional[Dict[str, Any]]:
+        """Persist an artefact row for a tool that declares an artifact_spec.
+
+        Returns the persisted row dict (so the streaming layer can yield a
+        ``typed_artefact`` SSE event), or ``None`` when no spec is attached.
+        """
         from .artifacts.emitter import emit_artifact
         from .artifacts.models import ArtifactSpec as _Spec, ArtifactStatus as _Status
 
         spec = tool.artifact_spec
         if spec is None:
-            return
+            return None
 
         result_data = result.data or {}
         # Refine the kind based on the change_plan's patches, if present.
@@ -1588,7 +1601,7 @@ class ToolExecutor:
             org_id=self.context.org_id,
             user_id=self.context.user_id,
         )
-        await emit_artifact(
+        return await emit_artifact(
             repo=repo,
             spec=_Spec(
                 kind=refined_kind,
@@ -1606,7 +1619,35 @@ class ToolExecutor:
             external_ref=external_ref,
             risk_level=risk_level,
         )
-    
+
+    def _build_typed_artefact_event(
+        self,
+        artefact: Dict[str, Any],
+        tool_name: str,
+    ) -> Dict[str, Any]:
+        """Shape the SSE payload the frontend chat hook consumes.
+
+        Carries everything ``TypedArtefactCard`` needs to render a kind-aware
+        card inline, plus ``toolName`` so approve/reject can route to the
+        right write tool.
+        """
+        return {
+            "type": "typed_artefact",
+            "artefactId": artefact.get("id"),
+            "kind": artefact.get("kind"),
+            "status": artefact.get("status"),
+            "title": artefact.get("title"),
+            "summary": artefact.get("summary"),
+            "payload": artefact.get("payload"),
+            "externalRef": artefact.get("externalRef"),
+            "riskLevel": artefact.get("riskLevel"),
+            "agentSessionId": artefact.get("agentSessionId"),
+            "sourceSessionId": artefact.get("sourceSessionId"),
+            "isPinned": bool(artefact.get("isPinned")),
+            "isSaved": bool(artefact.get("isSaved")),
+            "toolName": tool_name,
+        }
+
     # ==========================================
     # LINEAGE TOOL IMPLEMENTATIONS
     # ==========================================

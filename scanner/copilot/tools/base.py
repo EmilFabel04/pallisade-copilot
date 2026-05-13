@@ -140,6 +140,10 @@ class ToolResult:
     success: bool
     data: Any = None
     error: Optional[str] = None
+    # Side-channel for SSE events the executor wants the streaming loop in
+    # llm.py to forward to the client (e.g. `typed_artefact`). The executor
+    # appends here; llm.py drains and clears.
+    stream_events: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
