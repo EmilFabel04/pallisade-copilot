@@ -13,6 +13,8 @@ import re
 
 from .tools import Tool, ToolResult, get_tool_registry
 from .context_builder import CopilotContext, IntegrationInfo, TableSchema
+from .artifacts.repo import ArtifactRepo
+from .artifacts.models import ArtifactKind, ArtifactStatus
 from lineage.engine.store import Filters
 from lineage.graph import LineageLevel, LinePlane, PlatformDomain, AssetKind
 
@@ -177,10 +179,42 @@ def _missing_required_args(tool: Tool, args: Dict[str, Any]) -> List[str]:
     return missing
 
 
+async def fork_copilot_session(
+    *,
+    base_url: str,
+    org_id: str,
+    user_id: str,
+    parent_session_id: str,
+    title: str,
+) -> str:
+    """Create a child CopilotSession for an artefact's own agent session.
+
+    Uses the internal /api/copilot/sessions/fork endpoint. Returns the new sessionId.
+    """
+    import aiohttp
+    import os
+
+    headers = {
+        "X-Internal-Secret": os.environ.get("INTERNAL_API_SECRET", "pallisade-internal"),
+        "X-Organization-Id": org_id,
+        "X-User-Id": user_id,
+        "Content-Type": "application/json",
+    }
+    body = {"parentSessionId": parent_session_id, "title": title}
+    url = f"{base_url}/api/copilot/sessions/fork"
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=body) as resp:
+            if resp.status not in (200, 201):
+                text = await resp.text()
+                raise RuntimeError(f"Session fork failed ({resp.status}): {text}")
+            data = await resp.json()
+            return data["sessionId"]
+
+
 class ToolExecutor:
     """
     Executes tools against integration adapters.
-    
+
     This class routes tool calls to the appropriate integration
     adapter based on what the user has connected.
     """
@@ -6142,3 +6176,58 @@ class ToolExecutor:
                     )
         except Exception as e:
             return ToolResult(success=False, error=f"Failed to run watch: {str(e)}")
+
+    async def _execute_begin_artefact(self, args: Dict[str, Any]) -> ToolResult:
+        """Fork a child agent session and pre-create an Artifact row at status=draft."""
+        kind_str = args.get("kind")
+        intent = args.get("intent", "Untitled artefact")
+        subtype = args.get("subtype")
+
+        if not kind_str:
+            return ToolResult(success=False, error="kind is required")
+        try:
+            kind = ArtifactKind(kind_str)
+        except ValueError:
+            return ToolResult(success=False, error=f"Unknown kind: {kind_str}")
+
+        # 1. Fork the child session
+        child_session_id = await fork_copilot_session(
+            base_url=self.context.base_url,
+            org_id=self.context.org_id,
+            user_id=self.context.user_id,
+            parent_session_id=self.context.session_id,
+            title=intent,
+        )
+
+        # 2. Pre-create the artefact at draft
+        repo = ArtifactRepo(
+            base_url=self.context.base_url,
+            org_id=self.context.org_id,
+            user_id=self.context.user_id,
+        )
+        tool_call_id = args.get("__tool_call_id") or f"begin_{child_session_id}"
+        agent_run_id = getattr(self.context, "agent_run_id", None) or self.context.session_id
+
+        artefact = await repo.upsert(
+            idempotency_key=f"{tool_call_id}:{kind.value}",
+            kind=kind,
+            status=ArtifactStatus.draft,
+            payload={"kind": kind.value, "intent": intent},
+            title=intent,
+            summary=None,
+            subtype=subtype,
+            source_session_id=self.context.session_id,
+            agent_session_id=child_session_id,
+            tool_call_id=tool_call_id,
+            agent_run_id=agent_run_id,
+            is_saved=False,
+        )
+
+        return ToolResult(
+            success=True,
+            data={
+                "artefact_id": artefact["id"],
+                "agent_session_id": child_session_id,
+                "kind": kind.value,
+            },
+        )
