@@ -25,12 +25,9 @@ export async function GET(
         userId,
       },
       include: {
-        sourceSession: {
-          select: {
-            id: true,
-            title: true,
-          },
-        },
+        sourceSession: { select: { id: true, title: true } },
+        agentSession: { select: { id: true, title: true } },
+        integration: { select: { id: true, type: true } },
       },
     });
 
