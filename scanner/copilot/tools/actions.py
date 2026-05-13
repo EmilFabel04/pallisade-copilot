@@ -77,6 +77,11 @@ def _meta_create_change_plan():
             enum=["static", "ci", "sandbox"],
         ),
     ],
+    risk_level=RiskLevel.LOW,
+    artifact_spec=ArtifactSpec(
+        kind="PR_CHANGE",
+        status_on_success="proposed",
+    ),
 )
 def _meta_validate_change_plan():
     pass
@@ -132,6 +137,12 @@ def _meta_get_change_plan():
             default="main",
         ),
     ],
+    risk_level=RiskLevel.HIGH,
+    artifact_spec=ArtifactSpec(
+        kind="PR_CHANGE",
+        status_on_propose="approved",
+        status_on_success="applied",
+    ),
 )
 def _meta_apply_change_plan():
     pass
