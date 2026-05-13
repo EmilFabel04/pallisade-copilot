@@ -253,6 +253,34 @@ function AssistantPageInner() {
   } = useStreamingChat();
 
 
+  const handleSaveToArtifacts = useCallback(async (content: string, messageId?: string, srcSessionId?: string) => {
+    try {
+      const res = await fetch('/api/artifacts/document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          body: content,
+          format: 'md',
+          sourceSessionId: srcSessionId,
+          sourceMessageId: messageId,
+        }),
+      });
+      if (!res.ok) {
+        console.error('[artefacts] save-document failed', await res.text());
+        return;
+      }
+      const data = await res.json();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('toast', {
+          detail: { title: 'Saved as document', href: `/dashboard/artifacts/${data.artefact.id}` },
+        }));
+      }
+    } catch (err) {
+      console.error('[artefacts] save-document error', err);
+    }
+  }, []);
+
+
   // Helper to update artifact status in both streaming and finalized messages
   const setArtifactStatus = useCallback((artifactId: string, status: UIArtifact['status']) => {
     // Update in finalized messages
@@ -1475,8 +1503,8 @@ function AssistantPageInner() {
                               sessionId={sessionId}
                               isOpen={activeMenuId === message.id}
                               onClose={() => setActiveMenuId(null)}
-                              onSaveToArtifacts={() => {
-                                // TODO: wire up to the new artefacts UI when it lands.
+                              onSaveToArtifacts={(content) => {
+                                handleSaveToArtifacts(content, message.id, sessionId ?? undefined);
                                 setActiveMenuId(null);
                               }}
                             />

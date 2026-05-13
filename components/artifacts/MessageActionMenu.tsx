@@ -7,7 +7,7 @@ interface MessageActionMenuProps {
   content: string;
   messageId: string;
   sessionId: string | null;
-  onSaveToArtifacts: () => void;
+  onSaveToArtifacts: (content: string) => void;
   isOpen: boolean;
   onClose: () => void;
 }
@@ -58,7 +58,7 @@ export function MessageActionMenu({
       className="absolute right-0 top-8 z-20 w-44 bg-[var(--surface)] border border-[var(--subtle-border)] rounded-lg shadow-xl overflow-hidden"
     >
       <button
-        onClick={onSaveToArtifacts}
+        onClick={() => onSaveToArtifacts(content)}
         className="w-full flex items-center gap-2.5 px-3 py-2.5 text-[13px] text-[var(--text-tertiary)] hover:bg-[var(--overlay-bg)] hover:text-[var(--text)] transition-colors"
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
