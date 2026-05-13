@@ -1305,6 +1305,163 @@ class ToolExecutor:
             }
         )
 
+    async def _execute_create_monitor(self, args: Dict[str, Any]) -> ToolResult:
+        """Create a single monitor via the unified planning pipeline.
+
+        Wraps the same 3-step flow as _execute_confirmed_create_watch but
+        scoped to one target/one kind. Auto-emit hook persists the MONITOR
+        artefact from the structured `data` we return on success.
+        """
+        target_fqn = args.get("target_fqn") or ""
+        monitor_kind = args.get("monitor_kind") or ""
+        config = args.get("config") or {}
+        name = args.get("name") or f"{monitor_kind} on {target_fqn}"
+        schedule = args.get("schedule") or "0 * * * *"
+
+        if not target_fqn or not monitor_kind:
+            return ToolResult(success=False, error="target_fqn and monitor_kind are required")
+
+        node_id = self._resolve_fqn_to_node_id(target_fqn)
+        groups = [{
+            "anchor_name": target_fqn.split(".")[-1],
+            "anchor_fqn": target_fqn,
+            "anchor_id": node_id,
+            "anchor_node_type": "table",
+            "anchor_platform": "unknown",
+            "watch_type": "pipeline_health",
+            "recommendations": [{
+                "monitor_key": monitor_kind,
+                "target_fqn": target_fqn,
+                "target_node_id": node_id,
+                "config_hints": config,
+                "depth": 0,
+                "priority": 1,
+            }],
+        }]
+
+        try:
+            result = await self._call_nextjs("/api/schedule/plans", {
+                "name": name,
+                "scopeType": "asset",
+                "scopeConfig": {"nodeIds": [node_id]} if node_id else {},
+                "mode": "manual",
+                "families": [],
+                "schedule": schedule,
+                "timezone": "UTC",
+                "groups": groups,
+            })
+        except Exception as e:
+            return ToolResult(success=False, error=f"Monitor creation failed: {e}")
+
+        monitor_id = None
+        for g in result.get("groups", []) or []:
+            for m in g.get("monitors", []) or []:
+                monitor_id = m.get("id")
+                if monitor_id:
+                    break
+            if monitor_id:
+                break
+
+        if not monitor_id:
+            return ToolResult(success=False, error="Plan created but no monitor row was returned")
+
+        return ToolResult(
+            success=True,
+            data={
+                "title": name,
+                "summary": f"{monitor_kind} monitor on {target_fqn}",
+                "payload": {
+                    "kind": "MONITOR",
+                    "monitorId": monitor_id,
+                    "monitorKind": monitor_kind,
+                    "targetFqn": target_fqn,
+                    "configDiff": {"before": None, "after": config},
+                },
+                "external_ref": {"monitor_id": monitor_id, "plan_id": result.get("id")},
+            },
+        )
+
+    async def _execute_update_monitor(self, args: Dict[str, Any]) -> ToolResult:
+        """Update a monitor's config via the internal update route."""
+        monitor_id = args.get("monitor_id") or ""
+        config = args.get("config") or {}
+        policy_overrides = args.get("policy_overrides")
+        if not monitor_id:
+            return ToolResult(success=False, error="monitor_id is required")
+        if not isinstance(config, dict) or not config:
+            return ToolResult(success=False, error="config must be a non-empty object")
+
+        try:
+            body: Dict[str, Any] = {"config": config}
+            if policy_overrides is not None:
+                body["policyOverrides"] = policy_overrides
+            data = await self._call_nextjs(
+                f"/api/monitors/internal/{monitor_id}/update", body,
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=f"Monitor update failed: {e}")
+
+        return ToolResult(
+            success=True,
+            data={
+                "title": f"Update {data.get('monitorKind') or 'monitor'} on {data.get('targetFqn') or '?'}",
+                "summary": "Monitor config updated",
+                "payload": {
+                    "kind": "MONITOR",
+                    "monitorId": data.get("monitorId") or monitor_id,
+                    "monitorKind": data.get("monitorKind") or "",
+                    "targetFqn": data.get("targetFqn"),
+                    "configDiff": data.get("configDiff") or {"after": config},
+                },
+                "external_ref": {"monitor_id": data.get("monitorId") or monitor_id},
+            },
+        )
+
+    async def _delete_nextjs(self, path: str) -> dict:
+        """DELETE on a Next.js endpoint with internal auth."""
+        import aiohttp
+        import os
+        url = f"{self.context.base_url}{path}"
+        headers = {
+            "X-Internal-Secret": os.environ.get("INTERNAL_API_SECRET", "pallisade-internal"),
+            "X-Organization-Id": self.context.org_id,
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(url, headers=headers) as resp:
+                if resp.status not in (200, 204):
+                    error = await resp.text()
+                    raise Exception(f"Next.js DELETE {path} failed ({resp.status}): {error}")
+                if resp.status == 204:
+                    return {}
+                return await resp.json()
+
+    async def _execute_delete_monitor(self, args: Dict[str, Any]) -> ToolResult:
+        """Delete a monitor via the internal delete route."""
+        monitor_id = args.get("monitor_id") or ""
+        if not monitor_id:
+            return ToolResult(success=False, error="monitor_id is required")
+
+        try:
+            data = await self._delete_nextjs(f"/api/monitors/internal/{monitor_id}")
+        except Exception as e:
+            return ToolResult(success=False, error=f"Monitor delete failed: {e}")
+
+        return ToolResult(
+            success=True,
+            data={
+                "title": f"Delete {data.get('monitorKind') or 'monitor'} on {data.get('targetFqn') or '?'}",
+                "summary": "Monitor deleted",
+                "payload": {
+                    "kind": "MONITOR",
+                    "monitorId": data.get("monitorId") or monitor_id,
+                    "monitorKind": data.get("monitorKind") or "",
+                    "targetFqn": data.get("targetFqn"),
+                    "configDiff": {"operation": "delete"},
+                },
+                "external_ref": {"monitor_id": data.get("monitorId") or monitor_id, "deleted": True},
+            },
+        )
+
     async def _execute_tool(self, tool: Tool, args: Dict[str, Any]) -> "Union[ToolResult, ToolArtifactResult]":
         """Dispatch to _execute_<name>, then emit artefact if tool declares one."""
         handler = getattr(self, f"_execute_{tool.name}", None)
