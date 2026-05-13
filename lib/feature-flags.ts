@@ -1,9 +1,10 @@
 /**
- * Pallisade feature flags. Read from env at module load; default false.
- * Frontend code reads via NEXT_PUBLIC_FF_* (build-time exposure).
+ * Pallisade feature flags. ff_artefacts_v2 defaults to ON now that the
+ * monitor write slice has landed. Operators can disable per-deploy via
+ * NEXT_PUBLIC_FF_ARTEFACTS_V2=false.
  */
 export const FEATURE_FLAGS = {
-  ff_artefacts_v2: process.env.NEXT_PUBLIC_FF_ARTEFACTS_V2 === 'true',
+  ff_artefacts_v2: process.env.NEXT_PUBLIC_FF_ARTEFACTS_V2 !== 'false',
 } as const;
 
 export type FeatureFlag = keyof typeof FEATURE_FLAGS;
