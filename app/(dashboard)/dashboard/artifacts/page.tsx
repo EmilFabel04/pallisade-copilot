@@ -7,6 +7,7 @@ import { ArtifactFilters, ArtifactList } from '@/components/artifacts';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { toast } from 'sonner';
 import { cachedFetch, invalidateCache } from '@/lib/fetch-cache';
+import { isFeatureEnabled } from '@/lib/feature-flags';
 
 interface Artifact {
   id: string;
@@ -103,6 +104,21 @@ export default function ArtifactsPage() {
   const handleViewSource = (sessionId: string) => {
     router.push(`/dashboard/assistant?session=${sessionId}`);
   };
+
+  if (isFeatureEnabled('ff_artefacts_v2')) {
+    return (
+      <div className="min-h-screen bg-[var(--surface-inset)]">
+        <div className="max-w-7xl mx-auto px-6 py-8">
+          <div className="mb-8">
+            <h1 className="text-2xl font-semibold text-[var(--text)]">Artifacts</h1>
+            <p className="mt-1 text-[14px] text-[var(--muted)]">
+              The new artefacts surface is being built. Check back soon.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[var(--surface-inset)]">
