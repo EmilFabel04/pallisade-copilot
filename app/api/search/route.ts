@@ -58,7 +58,6 @@ export async function GET(request: NextRequest) {
         select: {
           id: true,
           title: true,
-          type: true,
           tags: true,
           updatedAt: true,
         },
@@ -103,10 +102,10 @@ export async function GET(request: NextRequest) {
       ...artifacts.map((a) => ({
         id: a.id,
         title: a.title,
-        subtitle: a.type + (a.tags.length ? ` · ${a.tags.join(', ')}` : ''),
+        subtitle: a.tags.length ? a.tags.join(', ') : '',
         category: 'artifact' as const,
         href: `/dashboard/artifacts?id=${a.id}`,
-        icon: a.type,
+        icon: 'artifact',
       })),
       ...tasks.map((t) => ({
         id: t.id,
