@@ -1437,14 +1437,22 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         use_execute_confirmed=True,
                     ):
                         yield ev
-                # Tell the LLM the action is done — do NOT re-call the tool.
+                # Tell the LLM the action is done — do NOT re-call the same write tool.
+                executed_tool_names = sorted({
+                    art_data.get("tool_name", "")
+                    for art_data in (confirmed_artifacts or {}).values()
+                    if art_data.get("tool_name")
+                })
+                tools_phrase = (
+                    ", ".join(executed_tool_names) if executed_tool_names else "the write tool"
+                )
                 anthropic_messages.append({
                     "role": "user",
                     "content": (
-                        "The user confirmed and the action above was executed "
-                        "successfully. Summarize the result in text. Do NOT "
-                        "call create_watch or any write tool again — the "
-                        "monitor has already been created."
+                        f"The user confirmed and the action above was executed "
+                        f"successfully. Summarize the result in text. Do NOT call "
+                        f"{tools_phrase} again — the artefact has already been "
+                        f"created or updated."
                     ),
                 })
                 # Clear so the in-loop guard doesn't re-execute.
@@ -1612,13 +1620,21 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         use_execute_confirmed=True,
                     ):
                         yield ev
+                executed_tool_names = sorted({
+                    art_data.get("tool_name", "")
+                    for art_data in (confirmed_artifacts or {}).values()
+                    if art_data.get("tool_name")
+                })
+                tools_phrase = (
+                    ", ".join(executed_tool_names) if executed_tool_names else "the write tool"
+                )
                 openai_messages.append({
                     "role": "user",
                     "content": (
-                        "The user confirmed and the action above was executed "
-                        "successfully. Summarize the result in text. Do NOT "
-                        "call create_watch or any write tool again — the "
-                        "monitor has already been created."
+                        f"The user confirmed and the action above was executed "
+                        f"successfully. Summarize the result in text. Do NOT call "
+                        f"{tools_phrase} again — the artefact has already been "
+                        f"created or updated."
                     ),
                 })
                 confirmed_artifacts = None
