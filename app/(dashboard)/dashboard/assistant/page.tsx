@@ -20,6 +20,8 @@ import { ToolConfirmation } from '@/components/copilot/ToolConfirmation';
 import { ToolIcon } from '@/components/icons/ToolIcon';
 import ArtifactRenderer from '@/components/copilot/ArtifactRenderer';
 import { UIArtifact } from '@/types/artifacts';
+import { TypedArtefactCard } from '@/components/copilot/artifacts/TypedArtefactCard';
+import type { TypedArtefactEnvelope } from '@/types/artefact-row';
 
 type ToolCall = {
   id?: string;
@@ -35,6 +37,7 @@ type Message = {
   timestamp: Date;
   toolCalls?: ToolCall[];
   artifacts?: UIArtifact[];
+  typedArtefacts?: TypedArtefactEnvelope[];
 };
 
 type ChatSession = {
@@ -329,6 +332,27 @@ function AssistantPageInner() {
   const handleArtifactCancel = useCallback(async (artifactId: string) => {
     setArtifactStatus(artifactId, 'cancelled');
   }, [setArtifactStatus]);
+
+  // Approve/reject an inline TypedArtefactCard. Reuses the existing
+  // __action:confirm message protocol so the scanner's `confirmed_artifacts`
+  // path picks it up. The envelope carries `toolName` so the route is exact
+  // for create_/update_/delete_monitor (no kind→tool guessing).
+  const handleTypedArtefactConfirm = useCallback(async (
+    env: TypedArtefactEnvelope,
+    action: 'confirm' | 'cancel',
+  ) => {
+    const actionMessage = `__action:${action}:${env.artefactId}:${env.toolName}:${JSON.stringify({})}`;
+    try {
+      await sendStreamingMessage(actionMessage, {
+        sessionId: sessionId || undefined,
+        model: selectedModel,
+        mode: selectedMode,
+        pipelineStackId: selectedPipelineId || undefined,
+      });
+    } catch (err) {
+      console.error('Typed artefact action failed:', err);
+    }
+  }, [sessionId, selectedModel, selectedMode, selectedPipelineId, sendStreamingMessage]);
 
 
   // Load mode from localStorage on client
@@ -954,6 +978,14 @@ function AssistantPageInner() {
       const newArtifacts = (streamingMessage.artifacts || []).filter(
         a => !existingArtifactIds.has(a.artifact_id)
       );
+      // Drop typed-artefact envelopes already attached to a prior message
+      // (e.g. when a confirmation flow re-streams the same artefactId).
+      const existingTypedIds = new Set(
+        messages.flatMap(m => m.typedArtefacts || []).map(t => t.artefactId)
+      );
+      const newTypedArtefacts = (streamingMessage.typedArtefacts || []).filter(
+        t => !existingTypedIds.has(t.artefactId)
+      );
 
       const aiMessage: Message = {
         id: streamingMessage.id,
@@ -962,6 +994,7 @@ function AssistantPageInner() {
         timestamp: new Date(),
         toolCalls: mappedToolCalls,
         artifacts: newArtifacts,
+        typedArtefacts: newTypedArtefacts,
       };
 
       setMessages(prev => [...prev, aiMessage]);
@@ -1593,6 +1626,19 @@ function AssistantPageInner() {
 
                         />
                       )}
+                      {/* Typed artefacts (PR_CHANGE, MONITOR, …) on completed messages */}
+                      {message.typedArtefacts && message.typedArtefacts.length > 0 && (
+                        <div className="space-y-2 mt-2">
+                          {message.typedArtefacts.map((env) => (
+                            <TypedArtefactCard
+                              key={env.artefactId}
+                              envelope={env}
+                              onApprove={(e) => handleTypedArtefactConfirm(e, 'confirm')}
+                              onReject={(e) => handleTypedArtefactConfirm(e, 'cancel')}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1708,6 +1754,19 @@ function AssistantPageInner() {
                           onCancel={handleArtifactCancel}
 
                         />
+                      )}
+                      {/* Typed artefact cards (PR_CHANGE, MONITOR, …) live-streamed via typed_artefact SSE event */}
+                      {streamingMessage.typedArtefacts && streamingMessage.typedArtefacts.length > 0 && (
+                        <div className="space-y-2 mt-2">
+                          {streamingMessage.typedArtefacts.map((env) => (
+                            <TypedArtefactCard
+                              key={env.artefactId}
+                              envelope={env}
+                              onApprove={(e) => handleTypedArtefactConfirm(e, 'confirm')}
+                              onReject={(e) => handleTypedArtefactConfirm(e, 'cancel')}
+                            />
+                          ))}
+                        </div>
                       )}
                     </div>
                   </div>
