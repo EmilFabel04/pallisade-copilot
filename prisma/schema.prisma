@@ -41,16 +41,16 @@ model User {
   sentInvites     TeamInvite[] @relation("InviteSender")
 
   // App data
-  reports              Report[]
-  copilotSessions      CopilotSession[]
-  notificationReads    NotificationRead[]
-  notificationsActored NotificationEvent[] @relation("NotificationActor")
-  notificationMutes    NotificationMute[]
-  scanSchedules        ScanSchedule[]
-  auditLogs            AuditLog[]
-  appliedFixes         AppliedFix[]
-  artifacts            Artifact[]
-  sourceConnectorWaitlist  SourceConnectorWaitlist[]
+  reports                 Report[]
+  copilotSessions         CopilotSession[]
+  notificationReads       NotificationRead[]
+  notificationsActored    NotificationEvent[]       @relation("NotificationActor")
+  notificationMutes       NotificationMute[]
+  scanSchedules           ScanSchedule[]
+  auditLogs               AuditLog[]
+  appliedFixes            AppliedFix[]
+  artifacts               Artifact[]
+  sourceConnectorWaitlist SourceConnectorWaitlist[]
 
   @@index([organizationId])
 }
@@ -1199,13 +1199,14 @@ model CopilotSession {
   updatedAt DateTime @updatedAt
 
   // Relations
-  user           User             @relation(fields: [userId], references: [id])
-  userId         String
-  organization   Organization     @relation(fields: [organizationId], references: [id])
-  organizationId String
-  messages       CopilotMessage[]
-  changePlans    ChangePlan[]
-  artifacts      Artifact[]
+  user              User             @relation(fields: [userId], references: [id])
+  userId            String
+  organization      Organization     @relation(fields: [organizationId], references: [id])
+  organizationId    String
+  messages          CopilotMessage[]
+  changePlans       ChangePlan[]
+  artifactsAsSource Artifact[]       @relation("ArtifactSource")
+  artifactAsAgent   Artifact?        @relation("ArtifactAgent")
 
   @@index([userId])
   @@index([organizationId])
@@ -1653,6 +1654,7 @@ model Integration {
 
   // Custom source probe history
   customSourceProbeRuns CustomSourceProbeRun[]
+  Artifact              Artifact[]
 
   @@unique([organizationId, type, name]) // Prevent duplicate connections
   @@index([organizationId])
@@ -1970,40 +1972,99 @@ enum FindingStatus {
 // ============================================
 
 model Artifact {
-  id      String       @id @default(cuid())
-  title   String
-  content String       @db.Text
-  type    ArtifactType
-  tags    String[]
+  id String @id @default(cuid())
 
-  // Source reference (link back to original chat)
+  kind    ArtifactKind
+  subtype String?
+  status  ArtifactStatus
+
+  // Sessions
   sourceSessionId String?
   sourceMessageId String?
-  sourceSession   CopilotSession? @relation(fields: [sourceSessionId], references: [id], onDelete: SetNull)
+  sourceSession   CopilotSession? @relation("ArtifactSource", fields: [sourceSessionId], references: [id], onDelete: SetNull)
+  agentSessionId  String?         @unique
+  agentSession    CopilotSession? @relation("ArtifactAgent", fields: [agentSessionId], references: [id], onDelete: SetNull)
 
+  // Tool-call provenance
+  toolCallId     String?
+  idempotencyKey String?
+  agentRunId     String?
+
+  // Integration binding
+  integrationId String?
+  integration   Integration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+
+  // External system reference (PR url, monitor id, ticket key, etc.)
+  externalRef Json?
+
+  // Typed payload — shape validated in app layer per kind
+  payload Json
+
+  // Display
+  title        String
+  summary      String?
+  riskLevel    ArtifactRisk?
+  rollbackHint String?
+
+  tags     String[]
+  isPinned Boolean  @default(false)
+  isSaved  Boolean  @default(false)
   metadata Json?
-  isPinned Boolean @default(false)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  appliedAt DateTime?
 
-  // Relations
   user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId         String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   organizationId String
 
+  @@unique([idempotencyKey, organizationId])
   @@index([userId])
   @@index([organizationId])
-  @@index([type])
+  @@index([kind])
+  @@index([kind, status])
+  @@index([organizationId, isSaved, status, createdAt])
+  @@index([sourceSessionId])
+  @@index([agentRunId])
 }
 
-enum ArtifactType {
-  QUERY // SQL queries
-  FIX // Bug fixes, config fixes
-  INSIGHT // Analysis, explanations
-  CODE // Code snippets
-  PLAN // Implementation plans
+enum ArtifactKind {
+  PR_CHANGE
+  WAREHOUSE_QUERY
+  SCHEMA_CHANGE
+  DBT_CORE_CHANGE
+  DBT_CLOUD_CHANGE
+  DAG
+  INGESTION_CONNECTOR
+  MONITOR
+  WATCH
+  INCIDENT
+  TICKET
+  NOTIFICATION_RULE
+  BI_ASSET
+  STORAGE_OBJECT
+  SERVER_ACTION
+  DOCUMENT
+}
+
+enum ArtifactStatus {
+  draft
+  proposed
+  approved
+  applied
+  rejected
+  failed
+  archived
+  open
+  resolved
+}
+
+enum ArtifactRisk {
+  LOW
+  MEDIUM
+  HIGH
 }
 
 // ==========================================
@@ -2135,24 +2196,24 @@ model Incident {
   pipelineStackId String
 
   // Source monitor
-  monitorId       String
-  monitor         Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
-  monitorGroupId  String?
-  targetFqn       String
+  monitorId      String
+  monitor        Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  monitorGroupId String?
+  targetFqn      String
 
   // Lifecycle
-  status          IncidentStatus   @default(OPEN)
-  severity        IncidentSeverity // FAIL → red hero, WARN → amber hero
-  openedAt        DateTime
-  openingRunId    String
+  status       IncidentStatus   @default(OPEN)
+  severity     IncidentSeverity // FAIL → red hero, WARN → amber hero
+  openedAt     DateTime
+  openingRunId String
 
   // LLM diagnosis (nullable until first analysis completes)
-  signature         String?
-  consecutiveCount  Int     @default(1)
-  llmHypothesis     String?
-  llmHypothesisAt   DateTime?
-  ownerSystem       String?
-  ownerConfidence   Float?
+  signature        String?
+  consecutiveCount Int       @default(1)
+  llmHypothesis    String?
+  llmHypothesisAt  DateTime?
+  ownerSystem      String?
+  ownerConfidence  Float?
 
   // Acknowledgement
   acknowledgedAt DateTime?
@@ -2160,7 +2221,7 @@ model Incident {
 
   // Resolution
   resolvedAt     DateTime?
-  resolvedBy     String?  // user id, or 'system' for auto
+  resolvedBy     String? // user id, or 'system' for auto
   resolutionType IncidentResolutionType?
   resolutionNote String?
 
@@ -2452,11 +2513,11 @@ model DriftRecommendation {
 }
 
 model SourceConnectorWaitlist {
-  id           String   @id @default(cuid())
-  userId       String
-  connectorId  String   // 'salesforce' | 'shopify' | 'hubspot'
-  requestedAt  DateTime @default(now())
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id          String   @id @default(cuid())
+  userId      String
+  connectorId String // 'salesforce' | 'shopify' | 'hubspot'
+  requestedAt DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, connectorId])
   @@index([connectorId])
