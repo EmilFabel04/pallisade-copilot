@@ -96,6 +96,34 @@ INTENT_BUDGETS: Dict[Intent, IntentBudget] = {
         max_revisions=0,
         description="Explain: GPT-5 only, with schema/lineage context",
     ),
+    # Write-action intents that previously fell through to INFO's 3-call budget,
+    # which was too tight: a typical CREATE flow is begin_artefact → read-only
+    # context (lineage / list_configured_monitors) → create_monitor →
+    # summarise = 4+ calls before the user has even confirmed.
+    Intent.CREATE: IntentBudget(
+        max_tool_calls=6,
+        max_specialist_calls=1,
+        max_revisions=1,
+        description="Create: gather context → propose write tool → confirm → summarise",
+    ),
+    Intent.BUNDLE: IntentBudget(
+        max_tool_calls=8,
+        max_specialist_calls=1,
+        max_revisions=1,
+        description="Bundle: like CREATE but multiple write tools in one turn (monitor groups, multi-target ops)",
+    ),
+    Intent.ONBOARD: IntentBudget(
+        max_tool_calls=6,
+        max_specialist_calls=0,
+        max_revisions=1,
+        description="Onboard: walk through integration setup, may call save_onboarding_context several times",
+    ),
+    Intent.SUGGEST: IntentBudget(
+        max_tool_calls=6,
+        max_specialist_calls=1,
+        max_revisions=1,
+        description="Suggest: gather coverage gaps + recommendations → propose monitors",
+    ),
 }
 
 

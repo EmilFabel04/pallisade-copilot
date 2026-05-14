@@ -678,6 +678,11 @@ AVAILABLE TOOLS:
 - begin_artefact: (Optional) Pre-create a draft MONITOR artefact and a child agent
   session before iterating on a complex monitor proposal.
 
+FORMATTING:
+- When you describe a cron schedule in chat (e.g. "0 * * * *"), ALWAYS wrap it in
+  backticks like `0 * * * *`. Otherwise Markdown will read the asterisks as italic
+  emphasis markers and strip them, leaving the user with garbage like "0 ,".
+
 EXAMPLES:
 - "Add a freshness monitor on `analytics.orders` with 6h threshold" →
   `create_monitor(target_fqn="analytics.orders", monitor_kind="FRESHNESS", config={"maxHours": 6})`
