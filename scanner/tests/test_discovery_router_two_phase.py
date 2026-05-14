@@ -192,3 +192,76 @@ def test_analyze_bulk_route(client, monkeypatch):
     body = r.json()
     assert len(body["results"]) == 2
     assert {item["table_fqn"] for item in body["results"]} == {"proj.ds.a", "proj.ds.b"}
+
+
+def test_end_to_end_ambiguous_pick_user_overrides(client, monkeypatch):
+    """analyze emits clarification → user answers → compute uses the answer."""
+    from scanner.lineage.sla_analysis import AnalysisPlan, AnalyzeResult
+    from scanner.lineage import sla_discovery as sd_module
+
+    plan = AnalysisPlan(
+        table_fqn="proj.ds.t",
+        warehouse_ancestor_fqn=None,
+        volume_timestamp_pick={"column": "ts", "confidence": 0.3},  # weak
+        volume_timestamp_candidates=[
+            {"column": "ts", "data_type": "TIMESTAMP", "confidence": 0.3},
+            {"column": "loaded_at", "data_type": "TIMESTAMP", "confidence": None},
+        ],
+        schema_snapshot={"columns": [{"name": "ts"}, {"name": "loaded_at"}]},
+        row_count=100,
+        unsupported=False,
+        skipped_reason=None,
+    )
+
+    # Stub analyze_sla so we don't need a real adapter + emit path.
+    monkeypatch.setattr(
+        "scanner.lineage.sla_analysis.analyze_sla",
+        lambda **kw: AnalyzeResult("proj.ds.t", plan, "awaiting_clarifications", ["ctx_1"]),
+    )
+
+    # Capture which timestamp column compute_sla ends up using.
+    captured = {}
+
+    def fake_compute(plan_arg, adapter, *, answers, **kw):
+        from scanner.lineage.sla_discovery import _resolve_volume_timestamp
+        captured["col"] = _resolve_volume_timestamp(plan_arg, answers or {})
+        from scanner.lineage.sla_discovery import DiscoveryResult
+        return DiscoveryResult(
+            node_fqn=plan_arg.table_fqn,
+            warehouse_ancestor_fqn=None,
+            volume={"enabled": True, "timeColumn": captured["col"]},
+        )
+
+    monkeypatch.setattr("scanner.lineage.sla_discovery.compute_sla", fake_compute)
+
+    # Stub the adapter factory in the loaded router module (same pattern as the
+    # earlier tests in this file).
+    from scanner.api.routers import discovery as router_mod
+    stub_adapter = MagicMock()
+    monkeypatch.setattr(router_mod, "_create_warehouse_adapter", lambda p, c: stub_adapter)
+
+    # 1. analyze returns awaiting + plan + clarification id.
+    r = client.post(
+        "/api/v1/discovery/analyze",
+        json={
+            "platform": "bigquery",
+            "tableFqn": "proj.ds.t",
+            "credentials": {"project_id": "x"},
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "awaiting_clarifications"
+    assert body["clarification_ids"] == ["ctx_1"]
+
+    # 2. compute with the user's chosen column overriding the picker.
+    compute_body = {
+        "platform": "bigquery",
+        "tableFqn": "proj.ds.t",
+        "credentials": {"project_id": "x"},
+        "plan": body["plan"],
+        "answers": {"ctx_1": {"column": "loaded_at"}},
+    }
+    r = client.post("/api/v1/discovery/compute", json=compute_body)
+    assert r.status_code == 200, r.text
+    assert captured["col"] == "loaded_at"

@@ -182,6 +182,7 @@ async def discover_node_sla(
     nearest warehouse ancestor, queries historical metrics, and returns
     suggested SLA thresholds without persisting anything.
     """
+    logger.warning("DEPRECATED endpoint /discovery/node used — migrate to /discovery/analyze + /compute")
     org_id = principal.organization_id
 
     # 1. Get the engine graph for this stack
@@ -307,6 +308,7 @@ async def discover_bulk_sla(
     Groups nodes by platform to reuse adapter connections. Each node is
     discovered independently — results are per-node, not merged.
     """
+    logger.warning("DEPRECATED endpoint /discovery/bulk used — migrate to /discovery/analyze + /compute")
     org_id = principal.organization_id
     stack_id = request.stackId  # bulk endpoint takes stack_id from body, not query
 
@@ -448,6 +450,7 @@ async def discover_direct_sla(request: DirectDiscoveryRequest):
     Does NOT require a lineage graph — the caller provides the platform,
     table FQN, and connection credentials directly.
     """
+    logger.warning("DEPRECATED endpoint /discovery/direct used — migrate to /discovery/analyze + /compute")
     try:
         from lineage.sla_discovery import discover_sla_direct
     except ImportError:
@@ -512,6 +515,7 @@ async def discover_direct_bulk_sla(request: BulkDirectDiscoveryRequest):
     Does NOT require a lineage graph — the caller provides the platform,
     table FQNs, and connection credentials directly.
     """
+    logger.warning("DEPRECATED endpoint /discovery/direct-bulk used — migrate to /discovery/analyze + /compute")
     try:
         from lineage.sla_discovery import discover_sla_direct
     except ImportError:

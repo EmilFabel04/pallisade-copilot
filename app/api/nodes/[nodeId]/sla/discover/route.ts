@@ -8,6 +8,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ nodeId: string }> }
 ) {
+  console.warn('[deprecated] POST /api/nodes/[nodeId]/sla/discover — use /sla/discover/analyze + /compute');
   try {
     const session = await auth();
     if (!session?.user) {

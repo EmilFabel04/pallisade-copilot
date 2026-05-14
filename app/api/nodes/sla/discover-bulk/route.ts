@@ -6,6 +6,7 @@ import { scannerClient } from '@/lib/scanner-client';
 
 // POST /api/nodes/sla/discover-bulk — Bulk SLA discovery for multiple nodes
 export async function POST(request: NextRequest) {
+  console.warn('[deprecated] POST /api/nodes/sla/discover-bulk — use /sla/discover-bulk/analyze + /compute');
   try {
     const session = await auth();
     if (!session?.user) {
