@@ -30,6 +30,8 @@ import {
   getConfidenceColor,
   getCrossLinkedOrchestration,
 } from './types';
+import { useClarificationsResolved } from '@/components/clarifications/useClarificationsResolved';
+import { useClarifications } from '@/components/clarifications/ClarificationProvider';
 
 // Platform → color mapping for colored badges (mirrors UnifiedNodes.tsx PLATFORM_COLORS)
 const _PLATFORM_BADGE_COLORS: Record<string, string> = {
@@ -399,7 +401,11 @@ export function DataAssetDetailPanel({
   const [recsLoading, setRecsLoading] = useState(false);
 
   // SLA discovery state
-  const [discoveryState, setDiscoveryState] = useState<'idle' | 'loading' | 'confirm' | 'unsupported'>('idle');
+  const [discoveryState, setDiscoveryState] = useState<
+    'idle' | 'analyzing' | 'awaiting_clarifications' | 'computing' | 'confirm' | 'unsupported'
+  >('idle');
+  const [plan, setPlan] = useState<Record<string, any> | null>(null);
+  const [clarificationIds, setClarificationIds] = useState<string[]>([]);
   const [discoveryResult, setDiscoveryResult] = useState<{
     freshness?: { enabled: boolean; maxHours: number; warningHours: number };
     volume?: {
@@ -420,11 +426,63 @@ export function DataAssetDetailPanel({
     uniqueness?: { enabled: boolean; duplicateRate: number; primaryKeyColumns: string[]; detectionMethod: string; totalRows: number; distinctRows: number; approximate: boolean; suggestedThreshold: number; skipped?: boolean; reason?: string };
   } | null>(null);
 
+  const { openPopup } = useClarifications();
+
+  const fireCompute = useCallback(
+    async (planArg: Record<string, any>, answers: Record<string, unknown>) => {
+      setDiscoveryState('computing');
+      try {
+        const engineId = node.id.replace(/^lineage-/, '');
+        const res = await fetch(`/api/nodes/${engineId}/sla/discover/compute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            stackId,
+            platform: node.platforms?.[0] || undefined,
+            tableFqn: node.fullName || undefined,
+            plan: planArg,
+            answers,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const r = data.result || {};
+          setDiscoveryResult({
+            freshness: r.freshness || undefined,
+            volume: r.volume || undefined,
+            quality: r.quality || undefined,
+            schema: r.schema_profile || r.schema || undefined,
+            uniqueness: r.uniqueness || undefined,
+          });
+          setDiscoveryState('confirm');
+        } else if (res.status === 422) {
+          const data = await res.json();
+          if (data.reason === 'no_warehouse_ancestor' || data.reason === 'unsupported') {
+            setDiscoveryState('unsupported');
+          } else {
+            setDiscoveryState('idle');
+            toast.error(data.reason || 'Discovery unavailable');
+          }
+        } else {
+          setDiscoveryState('idle');
+          toast.error('Compute failed');
+        }
+      } catch {
+        setDiscoveryState('idle');
+        toast.error('Compute failed');
+      }
+    },
+    [node.id, node.platforms, node.fullName, stackId],
+  );
+
   const handleDiscover = async () => {
-    setDiscoveryState('loading');
+    setDiscoveryState('analyzing');
+    setDiscoveryResult(null);
+    setPlan(null);
+    setClarificationIds([]);
     try {
       const engineId = node.id.replace(/^lineage-/, '');
-      const res = await fetch(`/api/nodes/${engineId}/sla/discover`, {
+      const res = await fetch(`/api/nodes/${engineId}/sla/discover/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -436,34 +494,49 @@ export function DataAssetDetailPanel({
       if (res.ok) {
         const data = await res.json();
         const r = data.result || {};
-        console.log('[SLA Discovery] Raw API response:', JSON.stringify(data, null, 2));
-        console.log('[SLA Discovery] Mapped result r:', JSON.stringify(r, null, 2));
-        // Map snake_case response fields to frontend shape
-        setDiscoveryResult({
-          freshness: r.freshness || undefined,
-          volume: r.volume || undefined,
-          quality: r.quality || undefined,
-          schema: r.schema_profile || r.schema || undefined,
-          uniqueness: r.uniqueness || undefined,
-        });
-        setDiscoveryState('confirm');
+        const nextPlan = r.plan;
+        const nextStatus: string = r.status;
+        const nextClarificationIds: string[] = Array.isArray(r.clarification_ids)
+          ? r.clarification_ids
+          : [];
+
+        if (nextPlan?.unsupported) {
+          setDiscoveryState('unsupported');
+          return;
+        }
+
+        setPlan(nextPlan);
+        setClarificationIds(nextClarificationIds);
+
+        if (nextStatus === 'ready') {
+          await fireCompute(nextPlan, {});
+        } else {
+          setDiscoveryState('awaiting_clarifications');
+        }
       } else if (res.status === 422) {
         const data = await res.json();
         if (data.reason === 'no_warehouse_ancestor' || data.reason === 'unsupported') {
           setDiscoveryState('unsupported');
         } else {
           setDiscoveryState('idle');
-          toast.error(data.reason || 'Discovery unavailable');
+          toast.error(data.reason || 'Analyze unavailable');
         }
       } else {
         setDiscoveryState('idle');
-        toast.error('Discovery failed');
+        toast.error('Analyze failed');
       }
     } catch {
       setDiscoveryState('idle');
-      toast.error('Discovery failed');
+      toast.error('Analyze failed');
     }
   };
+
+  useClarificationsResolved(
+    discoveryState === 'awaiting_clarifications' ? clarificationIds : [],
+    (answers) => {
+      if (plan) void fireCompute(plan, answers);
+    },
+  );
 
   const handleAcceptDiscovery = async () => {
     if (!discoveryResult) return;
@@ -1335,11 +1408,31 @@ export function DataAssetDetailPanel({
             </div>
           )}
 
-          {/* Loading state */}
-          {discoveryState === 'loading' && (
+          {/* Analyzing / Computing state */}
+          {(discoveryState === 'analyzing' || discoveryState === 'computing') && (
             <div className="mt-2 p-2.5 rounded-lg border border-dashed border-[var(--subtle-border)] bg-[var(--overlay-faint)] flex items-center gap-2">
               <div className="w-3.5 h-3.5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-              <span className="text-[12px] text-[var(--muted)]">Analyzing warehouse history...</span>
+              <span className="text-[12px] text-[var(--muted)]">
+                {discoveryState === 'analyzing' ? 'Analyzing warehouse columns…' : 'Computing SLA thresholds…'}
+              </span>
+            </div>
+          )}
+
+          {/* Awaiting clarifications state */}
+          {discoveryState === 'awaiting_clarifications' && (
+            <div className="mt-2 p-2.5 rounded-lg border border-amber-400/40 bg-amber-400/10">
+              <p className="text-[12px] font-medium text-amber-300">Need your input</p>
+              <p className="text-[11px] text-amber-200/80 mt-1">
+                Pallisade needs you to confirm {clarificationIds.length} column choice
+                {clarificationIds.length === 1 ? '' : 's'} before computing SLAs.
+              </p>
+              <button
+                type="button"
+                onClick={() => openPopup(clarificationIds[0])}
+                className="mt-2 text-[11px] text-amber-300 hover:text-amber-200 hover:underline flex items-center gap-1"
+              >
+                Answer now →
+              </button>
             </div>
           )}
 
