@@ -963,27 +963,6 @@ export function SLAEditorPanel({
             <div className="space-y-2 p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
               <div className="flex items-center justify-between gap-2">
                 <h4 className="text-[11px] font-medium text-[var(--text)] uppercase tracking-wide">Volume</h4>
-                {/*
-                  Discovery emits tentative=true + context_request_id when the
-                  timestamp picker had low confidence and we asked the user
-                  to disambiguate. Surface that here as a deep-link into the
-                  clarification popup so the user can resolve the question
-                  without leaving this panel.
-                */}
-                {getVal('volumeConfig', 'tentative') && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const cid = getVal('volumeConfig', 'context_request_id');
-                      if (cid) openClarificationPopup(cid);
-                      else openClarificationPopup();
-                    }}
-                    className="inline-flex items-center gap-1 text-[10px] text-amber-400 hover:text-amber-300 underline-offset-2 underline decoration-dotted"
-                    title="Discovery used a tentative timestamp column — click to clarify"
-                  >
-                    <span aria-hidden>🔍</span> awaiting clarification
-                  </button>
-                )}
               </div>
 
               {getVal('volumeConfig', 'enabled') === false ? (
@@ -999,7 +978,7 @@ export function SLAEditorPanel({
                   {getVal('volumeConfig', 'expectedDailyRows') != null && (
                     <p className="text-[11px] text-[var(--muted)]">
                       Expected daily rows:{' '}
-                      <span className={`font-medium ${getVal('volumeConfig', 'tentative') ? 'text-[var(--text)] border-b border-dashed border-amber-400/60' : 'text-[var(--text)]'}`}>
+                      <span className="font-medium text-[var(--text)]">
                         {Number(getVal('volumeConfig', 'expectedDailyRows')).toLocaleString()}
                       </span>
                       {getVal('volumeConfig', 'dataPoints') != null && (
