@@ -15,10 +15,49 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Send, X } from 'lucide-react';
 import { useClarifications } from './ClarificationProvider';
 import { BorderlineFailureCard } from './BorderlineFailureCard';
+import type { ContextRequest } from '@/lib/clarifications/types';
 
 interface ChatMsg {
   role: 'user' | 'assistant';
   content: string;
+}
+
+/**
+ * Render the opening question from a ContextRequest payload directly when we
+ * know its shape, so the popup never has to wait on an LLM round-trip to show
+ * the user what they're being asked. Returns null for kinds we don't recognise
+ * — the caller falls back to the LLM-driven chat.
+ */
+function buildOpeningMessage(req: ContextRequest): string | null {
+  if (req.kind === 'timestamp_choice') {
+    const payload = req.payload as {
+      table_fqn?: string;
+      candidates?: string[];
+      evidence?: { picked_column?: string };
+    };
+    const tableShort =
+      (payload.table_fqn ?? req.scope_ref ?? '').split('.').slice(-1)[0] ||
+      req.scope_ref;
+    const picked = payload.evidence?.picked_column;
+    const candidates = payload.candidates ?? [];
+
+    const intro = picked
+      ? `Which column should Pallisade use to bucket volume monitoring on \`${tableShort}\` — is \`${picked}\` the right one?`
+      : `Which column should Pallisade use to bucket volume monitoring on \`${tableShort}\`?`;
+
+    const tail =
+      "This is the column I'll use to count rows per day so volume drops/spikes get caught.";
+
+    if (candidates.length > 1) {
+      const others = candidates.filter((c) => c !== picked);
+      const candidateLine = others.length
+        ? `\n\nOther candidates: ${others.map((c) => `\`${c}\``).join(', ')}.`
+        : '';
+      return `${intro}\n\n${tail}${candidateLine}`;
+    }
+    return `${intro}\n\n${tail}`;
+  }
+  return null;
 }
 
 export function ClarificationPopup() {
@@ -27,6 +66,7 @@ export function ClarificationPopup() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [loadingQuestion, setLoadingQuestion] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const open = requests.filter((r) => r.status === 'open');
@@ -36,14 +76,23 @@ export function ClarificationPopup() {
   useEffect(() => {
     if (!popupOpen || !focused) {
       setMessages([]);
+      setLoadingQuestion(false);
       return;
     }
-    setMessages([
-      {
-        role: 'assistant',
-        content: `Quick clarification needed about ${focused.scope_ref}. Loading…`,
-      },
-    ]);
+
+    // Fast path: payload-driven question — render immediately, no LLM call.
+    const direct = buildOpeningMessage(focused);
+    if (direct !== null) {
+      setMessages([{ role: 'assistant', content: direct }]);
+      setLoadingQuestion(false);
+      return;
+    }
+
+    // Fallback: kinds we don't know how to render directly fall through to
+    // the LLM chat. Show a clean spinner — no placeholder text — until the
+    // server responds.
+    setMessages([]);
+    setLoadingQuestion(true);
     fetch('/api/copilot/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -60,7 +109,8 @@ export function ClarificationPopup() {
       })
       .catch(() => {
         setMessages([{ role: 'assistant', content: '(failed to load question)' }]);
-      });
+      })
+      .finally(() => setLoadingQuestion(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [popupOpen, focused?.id]);
 
@@ -173,6 +223,12 @@ export function ClarificationPopup() {
       )}
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+        {loadingQuestion && messages.length === 0 && (
+          <div className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
+            <div className="w-3 h-3 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+            <span>Preparing question…</span>
+          </div>
+        )}
         {messages.map((m, i) => (
           <div key={i} className={m.role === 'user' ? 'text-right' : 'text-left'}>
             <div
@@ -204,12 +260,12 @@ export function ClarificationPopup() {
             }}
             placeholder="Type your answer…"
             className="flex-1 px-3 py-2 rounded-md bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] outline-none focus:border-[var(--border-medium)]"
-            disabled={!focused || sending}
+            disabled={!focused || sending || loadingQuestion}
           />
           <button
             type="button"
             onClick={send}
-            disabled={!focused || sending || !input.trim()}
+            disabled={!focused || sending || loadingQuestion || !input.trim()}
             className="px-3 py-2 rounded-md bg-[var(--accent)] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90"
             aria-label="Send"
           >
