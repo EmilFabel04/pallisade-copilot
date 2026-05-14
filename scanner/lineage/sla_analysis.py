@@ -12,11 +12,13 @@ try:
     from scanner.lineage.sla_discovery import (
         _pick_volume_timestamp_column,
         _call_nextjs_create_context_request,
+        _find_warehouse_ancestor,
     )
 except ImportError:  # pragma: no cover
     from lineage.sla_discovery import (  # type: ignore
         _pick_volume_timestamp_column,
         _call_nextjs_create_context_request,
+        _find_warehouse_ancestor,
     )
 
 
@@ -190,3 +192,59 @@ def _safe_row_count(adapter: Any, table_fqn: str) -> Optional[int]:
     except Exception:
         logger.exception("get_row_count failed for %s", table_fqn)
         return None
+
+
+def analyze_sla_profile(
+    node: Any,
+    graph: Any,
+    adapter: Any,
+    *,
+    pipeline_stack_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
+) -> AnalyzeResult:
+    """Graph-aware analyze: resolves the warehouse ancestor first, then analyzes.
+
+    Mirrors ``discover_sla_profile`` — walks the lineage graph to find the
+    nearest warehouse ancestor of *node*, then delegates to ``analyze_sla``
+    for phase-1 column inspection.
+    """
+    ancestor = _find_warehouse_ancestor(node, graph)
+    warehouse_fqn: Optional[str] = ancestor.fqn if ancestor is not None else None
+
+    target_fqn = warehouse_fqn or getattr(node, "fqn", None)
+    if not target_fqn:
+        plan = AnalysisPlan(
+            table_fqn=getattr(node, "fqn", None) or "<unknown>",
+            warehouse_ancestor_fqn=None,
+            volume_timestamp_pick=None,
+            volume_timestamp_candidates=[],
+            schema_snapshot={"columns": []},
+            row_count=None,
+            unsupported=True,
+            skipped_reason="No warehouse ancestor found.",
+        )
+        return AnalyzeResult(table_fqn=plan.table_fqn, plan=plan, status="ready")
+
+    inner = analyze_sla(
+        table_fqn=target_fqn,
+        adapter=adapter,
+        pipeline_stack_id=pipeline_stack_id,
+        organization_id=organization_id,
+    )
+    # Frozen dataclass — rebuild with warehouse_ancestor_fqn set.
+    plan = AnalysisPlan(
+        table_fqn=inner.plan.table_fqn,
+        warehouse_ancestor_fqn=warehouse_fqn,
+        volume_timestamp_pick=inner.plan.volume_timestamp_pick,
+        volume_timestamp_candidates=inner.plan.volume_timestamp_candidates,
+        schema_snapshot=inner.plan.schema_snapshot,
+        row_count=inner.plan.row_count,
+        unsupported=inner.plan.unsupported,
+        skipped_reason=inner.plan.skipped_reason,
+    )
+    return AnalyzeResult(
+        table_fqn=plan.table_fqn,
+        plan=plan,
+        status=inner.status,
+        clarification_ids=inner.clarification_ids,
+    )

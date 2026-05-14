@@ -69,3 +69,25 @@ def test_compute_skips_when_plan_unsupported():
     result = compute_sla(plan, _adapter(), answers={})
     assert result.unsupported is True
     assert result.skipped_reason == "No columns visible"
+
+
+# ---------------------------------------------------------------------------
+# compute_sla_profile tests (Task 5)
+# ---------------------------------------------------------------------------
+
+from scanner.lineage.sla_discovery import compute_sla_profile  # noqa: E402
+
+
+def test_compute_profile_uses_warehouse_ancestor_from_plan():
+    plan = AnalysisPlan(
+        table_fqn="acme.analytics.events",
+        warehouse_ancestor_fqn="acme.analytics.events",
+        volume_timestamp_pick={"column": "loaded_at", "confidence": 0.9},
+        volume_timestamp_candidates=[{"column": "loaded_at", "data_type": "TIMESTAMP", "confidence": 0.9}],
+        schema_snapshot={"columns": [{"name": "loaded_at"}]},
+        row_count=100,
+        unsupported=False,
+        skipped_reason=None,
+    )
+    result = compute_sla_profile(plan, MagicMock(), _adapter(), answers={})
+    assert result.warehouse_ancestor_fqn == "acme.analytics.events"

@@ -1492,6 +1492,25 @@ def compute_sla(
     )
 
 
+def compute_sla_profile(
+    plan: Any,  # AnalysisPlan duck-typed; avoid module-level cycle
+    graph: Any,
+    adapter: Any,
+    *,
+    answers: Optional[Dict[str, Any]] = None,
+    pipeline_stack_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
+) -> DiscoveryResult:
+    """Graph variant — ``graph`` accepted for symmetry; warehouse ancestor is on plan."""
+    return compute_sla(
+        plan,
+        adapter,
+        answers=answers,
+        pipeline_stack_id=pipeline_stack_id,
+        organization_id=organization_id,
+    )
+
+
 async def discover_sla_direct(
     table_fqn: str,
     adapter: Any,

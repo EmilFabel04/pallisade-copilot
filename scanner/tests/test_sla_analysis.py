@@ -175,3 +175,50 @@ def test_compute_volume_does_not_reference_emit():
     import inspect
     source = inspect.getsource(sd._compute_volume)
     assert "_try_emit_timestamp_clarification" not in source
+
+
+# ---------------------------------------------------------------------------
+# analyze_sla_profile tests (Task 5)
+# ---------------------------------------------------------------------------
+
+from scanner.lineage.sla_analysis import analyze_sla_profile  # noqa: E402
+
+
+def test_analyze_profile_resolves_warehouse_ancestor():
+    node = MagicMock()
+    node.fqn = "stg.events"
+    graph = MagicMock()
+    adapter = _adapter_with([_col("loaded_at")])
+    ancestor = MagicMock()
+    ancestor.fqn = "acme.analytics.events"
+    with patch(
+        "scanner.lineage.sla_analysis._find_warehouse_ancestor",
+        return_value=ancestor,
+    ), patch(
+        "scanner.lineage.sla_analysis._get_confidence_threshold", return_value=0.85
+    ):
+        result = analyze_sla_profile(
+            node, graph, adapter,
+            pipeline_stack_id="s",
+            organization_id="o",
+        )
+    assert result.plan.table_fqn == "acme.analytics.events"
+    assert result.plan.warehouse_ancestor_fqn == "acme.analytics.events"
+
+
+def test_analyze_profile_unsupported_when_no_ancestor():
+    node = MagicMock()
+    node.fqn = None
+    graph = MagicMock()
+    adapter = _adapter_with([])
+    with patch(
+        "scanner.lineage.sla_analysis._find_warehouse_ancestor",
+        return_value=None,
+    ):
+        result = analyze_sla_profile(
+            node, graph, adapter,
+            pipeline_stack_id="s",
+            organization_id="o",
+        )
+    assert result.plan.unsupported is True
+    assert result.plan.skipped_reason
