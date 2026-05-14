@@ -402,10 +402,17 @@ export function DataAssetDetailPanel({
 
   // SLA discovery state
   const [discoveryState, setDiscoveryState] = useState<
-    'idle' | 'analyzing' | 'awaiting_clarifications' | 'computing' | 'confirm' | 'unsupported'
+    | 'idle'
+    | 'analyzing'
+    | 'awaiting_clarifications'
+    | 'review_answers'
+    | 'computing'
+    | 'confirm'
+    | 'unsupported'
   >('idle');
   const [plan, setPlan] = useState<Record<string, any> | null>(null);
   const [clarificationIds, setClarificationIds] = useState<string[]>([]);
+  const [pendingAnswers, setPendingAnswers] = useState<Record<string, unknown> | null>(null);
   const [discoveryResult, setDiscoveryResult] = useState<{
     freshness?: { enabled: boolean; maxHours: number; warningHours: number };
     volume?: {
@@ -534,9 +541,25 @@ export function DataAssetDetailPanel({
   useClarificationsResolved(
     discoveryState === 'awaiting_clarifications' ? clarificationIds : [],
     (answers) => {
-      if (plan) void fireCompute(plan, answers);
+      // Don't auto-fire compute — surface the answers for explicit review/submit.
+      setPendingAnswers(answers);
+      setDiscoveryState('review_answers');
     },
   );
+
+  const handleSubmitAnswers = useCallback(() => {
+    if (plan && pendingAnswers) {
+      void fireCompute(plan, pendingAnswers);
+    }
+  }, [plan, pendingAnswers, fireCompute]);
+
+  const handleCancelDiscovery = useCallback(() => {
+    setDiscoveryState('idle');
+    setPlan(null);
+    setClarificationIds([]);
+    setPendingAnswers(null);
+    setDiscoveryResult(null);
+  }, []);
 
   const handleAcceptDiscovery = async () => {
     if (!discoveryResult) return;
@@ -1433,6 +1456,46 @@ export function DataAssetDetailPanel({
               >
                 Answer now →
               </button>
+            </div>
+          )}
+
+          {/* Review answers state — user confirms before compute fires */}
+          {discoveryState === 'review_answers' && pendingAnswers && (
+            <div className="mt-2 p-2.5 rounded-lg border border-emerald-400/40 bg-emerald-400/10">
+              <p className="text-[12px] font-medium text-emerald-300">Ready to compute</p>
+              <p className="text-[11px] text-emerald-200/80 mt-1">
+                Pallisade will use these choices to compute SLAs:
+              </p>
+              <ul className="mt-1.5 space-y-1">
+                {Object.entries(pendingAnswers).map(([id, ans]) => {
+                  const a = ans as { column?: string } | null;
+                  const col = a?.column ?? '(no answer)';
+                  return (
+                    <li key={id} className="text-[11px] text-emerald-100/90 flex gap-1">
+                      <span className="text-emerald-300/70">·</span>
+                      <span>
+                        Daily volume bucketing → column <code className="px-1 rounded bg-emerald-500/15 text-emerald-200">{col}</code>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleSubmitAnswers}
+                  className="text-[11px] px-2 py-1 rounded bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30"
+                >
+                  Submit & compute
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancelDiscovery}
+                  className="text-[11px] px-2 py-1 rounded text-emerald-300/70 hover:text-emerald-200"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           )}
 

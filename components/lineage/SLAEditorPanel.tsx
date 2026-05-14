@@ -21,6 +21,7 @@ type BulkSlot =
   | { tableFqn: string; platform: string; engineId: string; status: 'analyzing' }
   | { tableFqn: string; platform: string; engineId: string; status: 'computing'; plan: Record<string, any> }
   | { tableFqn: string; platform: string; engineId: string; status: 'awaiting'; plan: Record<string, any>; clarificationIds: string[] }
+  | { tableFqn: string; platform: string; engineId: string; status: 'review'; plan: Record<string, any>; answers: Record<string, unknown> }
   | { tableFqn: string; platform: string; engineId: string; status: 'ready'; result: any }
   | { tableFqn: string; platform: string; engineId: string; status: 'error'; message: string };
 
@@ -233,7 +234,8 @@ export function SLAEditorPanel({
     }
   }, [bulkSlots]);
 
-  // Watch clarification answers; fire compute for each awaiting slot once all its IDs are answered
+  // Watch clarification answers; move each awaiting slot to 'review' once all its
+  // IDs are answered. Compute is deferred until the user explicitly submits.
   useEffect(() => {
     const awaitingSlots = Object.values(bulkSlots).filter(
       (s): s is Extract<BulkSlot, { status: 'awaiting' }> => s.status === 'awaiting',
@@ -246,7 +248,6 @@ export function SLAEditorPanel({
       );
       if (!allAnswered) continue;
 
-      // Build answers map from the answered ContextRequests' answer payloads.
       (async () => {
         const answers: Record<string, unknown> = {};
         await Promise.all(
@@ -259,7 +260,6 @@ export function SLAEditorPanel({
             }
           }),
         );
-        // Mark this slot as 'computing' to avoid duplicate fires.
         setBulkSlots((prev) => {
           if (prev[slot.tableFqn]?.status !== 'awaiting') return prev;
           return {
@@ -268,15 +268,12 @@ export function SLAEditorPanel({
               tableFqn: slot.tableFqn,
               platform: slot.platform,
               engineId: slot.engineId,
-              status: 'computing',
+              status: 'review',
               plan: slot.plan,
+              answers,
             },
           };
         });
-        await runComputeBulk(
-          [{ tableFqn: slot.tableFqn, platform: slot.platform, plan: slot.plan }],
-          { [slot.tableFqn]: answers },
-        );
       })();
     }
     // requestsById is the trigger — adding bulkSlots to deps would loop.
@@ -471,6 +468,37 @@ export function SLAEditorPanel({
     },
     [stackId],
   );
+
+  const handleSubmitBulkAnswers = useCallback(async () => {
+    const reviewSlots = Object.values(bulkSlots).filter(
+      (s): s is Extract<BulkSlot, { status: 'review' }> => s.status === 'review',
+    );
+    if (reviewSlots.length === 0) return;
+
+    setBulkSlots((prev) => {
+      const next = { ...prev };
+      for (const slot of reviewSlots) {
+        next[slot.tableFqn] = {
+          tableFqn: slot.tableFqn,
+          platform: slot.platform,
+          engineId: slot.engineId,
+          status: 'computing',
+          plan: slot.plan,
+        };
+      }
+      return next;
+    });
+
+    const items = reviewSlots.map((s) => ({
+      tableFqn: s.tableFqn,
+      platform: s.platform,
+      plan: s.plan,
+    }));
+    const answersByTable: Record<string, Record<string, unknown>> = {};
+    for (const s of reviewSlots) answersByTable[s.tableFqn] = s.answers;
+
+    await runComputeBulk(items, answersByTable);
+  }, [bulkSlots, runComputeBulk]);
 
   const handleBulkDiscover = useCallback(async () => {
     if (discoverableNodes.length === 0) return;
@@ -676,18 +704,53 @@ export function SLAEditorPanel({
         const slots = Object.values(bulkSlots);
         const ready = slots.filter((s) => s.status === 'ready').length;
         const awaiting = slots.filter((s) => s.status === 'awaiting').length;
+        const review = slots.filter((s) => s.status === 'review').length;
         const computing = slots.filter((s) => s.status === 'computing' || s.status === 'analyzing').length;
         const total = slots.length;
+        const reviewSlots = slots.filter(
+          (s): s is Extract<BulkSlot, { status: 'review' }> => s.status === 'review',
+        );
+        const allReadyToSubmit = review > 0 && awaiting === 0 && computing === 0;
 
         return (
-          <div className="mt-2 p-3 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-faint)]">
+          <div className="mt-2 p-3 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-faint)] space-y-2">
             <p className="text-[12px] text-[var(--muted)]">
-              Computing {computing} of {total} · {awaiting} awaiting input · {ready} ready
+              Computing {computing} of {total} · {awaiting} awaiting input · {review} ready to submit · {ready} done
             </p>
             {awaiting > 0 && (
-              <p className="text-[11px] text-amber-300 mt-1.5">
+              <p className="text-[11px] text-amber-300">
                 {awaiting} table{awaiting === 1 ? '' : 's'} need column choices. Answer them in the clarification panel to continue.
               </p>
+            )}
+            {review > 0 && (
+              <div className="rounded border border-emerald-400/40 bg-emerald-400/10 p-2">
+                <p className="text-[11px] font-medium text-emerald-300">
+                  {review} table{review === 1 ? '' : 's'} ready to submit
+                </p>
+                <ul className="mt-1 space-y-0.5">
+                  {reviewSlots.map((slot) => {
+                    const firstAnswer = Object.values(slot.answers)[0] as { column?: string } | null;
+                    const col = firstAnswer?.column ?? '(no answer)';
+                    const shortName = slot.tableFqn.split('.').pop() ?? slot.tableFqn;
+                    return (
+                      <li key={slot.tableFqn} className="text-[11px] text-emerald-100/90">
+                        <span className="text-emerald-300/70">·</span>{' '}
+                        <span className="font-mono">{shortName}</span> → column{' '}
+                        <code className="px-1 rounded bg-emerald-500/15 text-emerald-200">{col}</code>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {allReadyToSubmit && (
+                  <button
+                    type="button"
+                    onClick={handleSubmitBulkAnswers}
+                    className="mt-2 text-[11px] px-2 py-1 rounded bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30"
+                  >
+                    Submit & compute {review} SLA{review === 1 ? '' : 's'}
+                  </button>
+                )}
+              </div>
             )}
           </div>
         );
