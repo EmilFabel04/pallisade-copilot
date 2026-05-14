@@ -14,62 +14,70 @@ interface TypedArtefactCardProps {
   onReject?: (env: TypedArtefactEnvelope) => void;
 }
 
-const STATUS_TINT: Record<string, string> = {
-  draft:    'text-zinc-300 bg-zinc-500/10',
-  proposed: 'text-amber-300 bg-amber-500/10',
-  approved: 'text-blue-300 bg-blue-500/10',
-  applied:  'text-emerald-300 bg-emerald-500/10',
-  rejected: 'text-rose-300 bg-rose-500/10',
-  failed:   'text-rose-300 bg-rose-500/10',
-  archived: 'text-zinc-400 bg-zinc-500/10',
-  open:     'text-amber-300 bg-amber-500/10',
-  resolved: 'text-emerald-300 bg-emerald-500/10',
+const STATUS_TONE: Record<string, { fg: string; bg: string }> = {
+  draft:    { fg: 'var(--neutral-fg)', bg: 'var(--neutral-bg)' },
+  proposed: { fg: 'var(--warning-fg)', bg: 'var(--warning-bg)' },
+  approved: { fg: 'var(--info-fg)',    bg: 'var(--info-bg)' },
+  applied:  { fg: 'var(--success-fg)', bg: 'var(--success-bg)' },
+  rejected: { fg: 'var(--danger-fg)',  bg: 'var(--danger-bg)' },
+  failed:   { fg: 'var(--danger-fg)',  bg: 'var(--danger-bg)' },
+  archived: { fg: 'var(--neutral-fg)', bg: 'var(--neutral-bg)' },
+  open:     { fg: 'var(--warning-fg)', bg: 'var(--warning-bg)' },
+  resolved: { fg: 'var(--success-fg)', bg: 'var(--success-bg)' },
 };
 
-const RISK_TINT: Record<string, string> = {
-  LOW:    'text-emerald-300 bg-emerald-500/10',
-  MEDIUM: 'text-amber-300 bg-amber-500/10',
-  HIGH:   'text-rose-300 bg-rose-500/10',
+const RISK_TONE: Record<string, { fg: string; bg: string }> = {
+  LOW:    { fg: 'var(--success-fg)', bg: 'var(--success-bg)' },
+  MEDIUM: { fg: 'var(--warning-fg)', bg: 'var(--warning-bg)' },
+  HIGH:   { fg: 'var(--danger-fg)',  bg: 'var(--danger-bg)' },
 };
 
 export function TypedArtefactCard({ envelope, onApprove, onReject }: TypedArtefactCardProps) {
   const row = envelopeToRow(envelope);
   const canConfirm = envelope.status === 'proposed';
   const kindMeta = KIND_META[envelope.kind];
+  const statusTone = STATUS_TONE[envelope.status] || STATUS_TONE.draft;
+  const riskTone = envelope.riskLevel ? RISK_TONE[envelope.riskLevel] : null;
 
   return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] my-2 overflow-hidden">
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] my-2 overflow-hidden max-w-[640px]">
       {/* HEADER */}
-      <div className="px-4 pt-4 pb-3 border-b border-[var(--border)]/60">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1 space-y-2">
-            <div className="flex items-center gap-2 flex-wrap">
+      <div className="px-3 pt-3 pb-2.5 border-b border-[var(--border)]/60">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <span
-                className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium ${kindMeta.tint}`}
-                style={{ backgroundColor: 'var(--hover-bg)' }}
+                className="inline-flex items-center px-1.5 py-0.5 rounded text-[10.5px] font-medium"
+                style={{ color: 'var(--neutral-fg)', backgroundColor: 'var(--neutral-bg)' }}
               >
                 {kindMeta.label}
               </span>
-              <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium uppercase tracking-wide ${STATUS_TINT[envelope.status] || 'text-zinc-300 bg-zinc-500/10'}`}>
+              <span
+                className="inline-flex items-center px-1.5 py-0.5 rounded text-[10.5px] font-medium uppercase tracking-wide"
+                style={{ color: statusTone.fg, backgroundColor: statusTone.bg }}
+              >
                 {envelope.status}
               </span>
-              {envelope.riskLevel ? (
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wider ${RISK_TINT[envelope.riskLevel] || ''}`}>
+              {riskTone ? (
+                <span
+                  className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider"
+                  style={{ color: riskTone.fg, backgroundColor: riskTone.bg }}
+                >
                   {envelope.riskLevel}
                 </span>
               ) : null}
             </div>
-            <h3 className="text-[15px] font-medium text-[var(--text)] leading-tight">
+            <h3 className="text-[14px] font-medium text-[var(--text)] leading-tight">
               {envelope.title}
             </h3>
             {envelope.summary ? (
-              <p className="text-[12.5px] text-[var(--muted)]">{envelope.summary}</p>
+              <p className="text-[12px] text-[var(--muted)]">{envelope.summary}</p>
             ) : null}
           </div>
 
           <Link
             href={`/dashboard/artifacts/${envelope.artefactId}`}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-inset)] shrink-0"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11.5px] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--hover-bg)] shrink-0"
           >
             Open
             <ExternalLink className="h-3 w-3" />
@@ -78,7 +86,7 @@ export function TypedArtefactCard({ envelope, onApprove, onReject }: TypedArtefa
       </div>
 
       {/* BODY — compact inline version for MONITOR; fall back to full ArtefactBody otherwise */}
-      <div className="px-4 py-3">
+      <div className="px-3 py-2.5">
         {envelope.kind === 'MONITOR' ? (
           <CompactMonitorBody payload={envelope.payload} />
         ) : (
@@ -88,11 +96,13 @@ export function TypedArtefactCard({ envelope, onApprove, onReject }: TypedArtefa
 
       {/* FOOTER */}
       {canConfirm ? (
-        <div className="px-4 pb-3 pt-1 flex items-center justify-end gap-2 border-t border-[var(--border)]/60">
+        <div className="px-3 pb-2.5 pt-1.5 flex items-center justify-end gap-2 border-t border-[var(--border)]/60">
           <button
             type="button"
             onClick={() => onReject?.(envelope)}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] text-[var(--muted)] hover:text-rose-300 hover:bg-rose-500/10"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11.5px] text-[var(--muted)] hover:bg-[var(--hover-bg)]"
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--danger-fg)'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--muted)'; }}
           >
             <X className="h-3 w-3" />
             Reject
@@ -100,7 +110,10 @@ export function TypedArtefactCard({ envelope, onApprove, onReject }: TypedArtefa
           <button
             type="button"
             onClick={() => onApprove?.(envelope)}
-            className="inline-flex items-center gap-1 px-3 py-1 rounded-md text-[12px] font-medium text-emerald-100 bg-emerald-500/20 hover:bg-emerald-500/30"
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11.5px] font-medium"
+            style={{ color: 'var(--success-fg)', backgroundColor: 'var(--success-bg)' }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--success-bg-strong)'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--success-bg)'; }}
           >
             <Check className="h-3 w-3" />
             Approve
@@ -111,9 +124,6 @@ export function TypedArtefactCard({ envelope, onApprove, onReject }: TypedArtefa
   );
 }
 
-// Compact, chat-friendly MONITOR body. The full MonitorArtifactBody (used on
-// the detail page) shows a side-by-side before/after JSON diff which is too
-// heavy for inline rendering. This version surfaces the headline facts.
 function CompactMonitorBody({ payload }: { payload: ArtifactPayload }) {
   if (payload.kind !== 'MONITOR') return null;
   const diff = payload.configDiff as
@@ -123,26 +133,29 @@ function CompactMonitorBody({ payload }: { payload: ArtifactPayload }) {
   const after = (diff?.after ?? {}) as Record<string, any>;
 
   return (
-    <div className="space-y-3 text-[13px]">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
-        <Row icon={<Activity className="h-3.5 w-3.5" />} label="Kind">
-          <span className="text-[var(--text)]">
+    <div className="space-y-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5">
+        <Row icon={<Activity className="h-3 w-3" />} label="Kind">
+          <span className="text-[12px] text-[var(--text)]">
             {prettyKind(payload.monitorKind)}
           </span>
         </Row>
         {payload.targetFqn ? (
-          <Row icon={<Target className="h-3.5 w-3.5" />} label="Target">
-            <code className="text-[12px] text-indigo-300 break-all">{payload.targetFqn}</code>
+          <Row icon={<Target className="h-3 w-3" />} label="Target">
+            <code className="text-[11.5px] text-[var(--code-fg)] break-all">{payload.targetFqn}</code>
           </Row>
         ) : null}
       </div>
 
       {operation === 'delete' ? (
-        <div className="text-[12.5px] text-rose-300 rounded-md bg-rose-500/10 px-3 py-2">
+        <div
+          className="text-[11.5px] rounded-md px-2.5 py-1.5"
+          style={{ color: 'var(--danger-fg)', backgroundColor: 'var(--danger-bg)' }}
+        >
           Monitor deleted.
         </div>
       ) : Object.keys(after).length > 0 ? (
-        <div className="text-[12px] font-mono text-[var(--text)] bg-[var(--surface-inset)] rounded-md px-3 py-2">
+        <div className="text-[11.5px] font-mono text-[var(--text)] bg-[var(--surface-inset)] rounded-md px-2.5 py-1.5">
           {summariseConfig(after)}
         </div>
       ) : null}
@@ -159,7 +172,7 @@ function Row({
 }) {
   return (
     <div className="flex items-baseline gap-2 min-w-0">
-      <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-[var(--muted)] shrink-0">
+      <span className="inline-flex items-center gap-1 text-[10.5px] uppercase tracking-wider text-[var(--muted)] shrink-0">
         {icon}
         {label}
       </span>

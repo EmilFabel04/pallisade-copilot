@@ -12,18 +12,12 @@ interface MonitorArtifactCardProps {
   onCancel: (artifactId: string) => void;
 }
 
-const CATEGORY_LABELS: Record<string, { label: string; tint: string }> = {
-  pipeline_health: { label: 'Data Pipeline', tint: 'text-blue-300 bg-blue-500/10' },
-  dashboard_shield: { label: 'Dashboard',    tint: 'text-slate-300 bg-slate-500/10' },
-  model_quality:   { label: 'Transformation', tint: 'text-amber-300 bg-amber-500/10' },
-  data_drift:      { label: 'Data Drift',    tint: 'text-rose-300 bg-rose-500/10' },
-  custom_watch:    { label: 'Custom',        tint: 'text-zinc-300 bg-zinc-500/10' },
-};
-
-const ACTION_LABELS: Record<string, { text: string; tint: string }> = {
-  create: { text: 'CREATE', tint: 'text-emerald-300 bg-emerald-500/10' },
-  update: { text: 'UPDATE', tint: 'text-blue-300 bg-blue-500/10' },
-  delete: { text: 'DELETE', tint: 'text-rose-300 bg-rose-500/10' },
+const CATEGORY_LABELS: Record<string, string> = {
+  pipeline_health:  'Data Pipeline',
+  dashboard_shield: 'Dashboard',
+  model_quality:    'Transformation',
+  data_drift:       'Data Drift',
+  custom_watch:     'Custom',
 };
 
 const SCHEDULE_OPTIONS = [
@@ -64,10 +58,16 @@ interface FormValues {
   anomalyColumn: string;
 }
 
+const ACTION_TONE: Record<string, { label: string; fg: string; bg: string }> = {
+  create: { label: 'CREATE', fg: 'var(--success-fg)', bg: 'var(--success-bg)' },
+  update: { label: 'UPDATE', fg: 'var(--info-fg)',    bg: 'var(--info-bg)' },
+  delete: { label: 'DELETE', fg: 'var(--danger-fg)',  bg: 'var(--danger-bg)' },
+};
+
 export default function MonitorArtifactCard({ artifact, onConfirm, onCancel }: MonitorArtifactCardProps) {
   const { data, action, status } = artifact;
-  const actionLabel = ACTION_LABELS[action] || ACTION_LABELS.create;
-  const category    = CATEGORY_LABELS[data.watchType] || CATEGORY_LABELS.custom_watch;
+  const actionTone = ACTION_TONE[action] || ACTION_TONE.create;
+  const categoryLabel = CATEGORY_LABELS[data.watchType] || CATEGORY_LABELS.custom_watch;
   const isProposed  = status === 'proposed';
   const isExecuting = status === 'executing';
   const isCompleted = status === 'completed';
@@ -75,9 +75,6 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel }: M
   const isCancelled = status === 'cancelled';
 
   const [isEditing, setIsEditing] = useState(false);
-  // Single source of truth — both view and edit modes read from this. Clicking
-  // "Done" simply hides the inputs; the display continues to show what the user
-  // picked. Confirm sends this whole object back to the executor.
   const [form, setForm] = useState<FormValues>(() => ({
     name: data.name || 'Monitor',
     schedule: data.schedule || '0 */6 * * *',
@@ -108,18 +105,24 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel }: M
   };
 
   return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] my-2 overflow-hidden">
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] my-2 overflow-hidden max-w-[640px]">
       {/* HEADER */}
-      <div className="px-4 pt-4 pb-3 border-b border-[var(--border)]/60">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1 space-y-2">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold tracking-wider ${actionLabel.tint}`}>
-                {actionLabel.text}
+      <div className="px-3 pt-3 pb-2.5 border-b border-[var(--border)]/60">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span
+                className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wider"
+                style={{ color: actionTone.fg, backgroundColor: actionTone.bg }}
+              >
+                {actionTone.label}
               </span>
               {data.watchType ? (
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium ${category.tint}`}>
-                  {category.label}
+                <span
+                  className="inline-flex items-center px-1.5 py-0.5 rounded text-[10.5px] font-medium"
+                  style={{ color: 'var(--neutral-fg)', backgroundColor: 'var(--neutral-bg)' }}
+                >
+                  {categoryLabel}
                 </span>
               ) : null}
               <StatusPill
@@ -135,11 +138,11 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel }: M
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))}
-                className="w-full text-[15px] font-medium bg-transparent border-b border-[var(--border)] focus:border-[var(--text)] outline-none px-0 py-1 text-[var(--text)]"
+                className="w-full text-[14px] font-medium bg-transparent border-b border-[var(--border)] focus:border-[var(--text)] outline-none px-0 py-1 text-[var(--text)]"
                 autoFocus
               />
             ) : (
-              <h3 className="text-[15px] font-medium text-[var(--text)] leading-tight">
+              <h3 className="text-[14px] font-medium text-[var(--text)] leading-tight">
                 {form.name}
               </h3>
             )}
@@ -150,7 +153,7 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel }: M
               <button
                 type="button"
                 onClick={() => setIsEditing(v => !v)}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-inset)]"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11.5px] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--hover-bg)]"
               >
                 <Pencil className="h-3 w-3" />
                 {isEditing ? 'Done' : 'Edit'}
@@ -158,7 +161,9 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel }: M
               <button
                 type="button"
                 onClick={() => onCancel(artifact.artifact_id)}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] text-[var(--muted)] hover:text-rose-300 hover:bg-rose-500/10"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11.5px] text-[var(--muted)] hover:bg-[var(--hover-bg)]"
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--danger-fg)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--muted)'; }}
               >
                 <X className="h-3 w-3" />
                 Cancel
@@ -166,7 +171,10 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel }: M
               <button
                 type="button"
                 onClick={handleConfirm}
-                className="inline-flex items-center gap-1 px-3 py-1 rounded-md text-[12px] font-medium text-emerald-200 bg-emerald-500/15 hover:bg-emerald-500/25"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11.5px] font-medium"
+                style={{ color: 'var(--success-fg)', backgroundColor: 'var(--success-bg)' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--success-bg-strong)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--success-bg)'; }}
               >
                 <Check className="h-3 w-3" />
                 Confirm
@@ -177,29 +185,29 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel }: M
       </div>
 
       {/* META GRID */}
-      <div className="px-4 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 border-b border-[var(--border)]/60 text-[13px]">
-        <MetaRow icon={<Target className="h-3.5 w-3.5" />} label="Target">
-          <code className="text-[12px] text-indigo-300 break-all">{data.anchorFqn || '—'}</code>
+      <div className="px-3 py-2.5 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 border-b border-[var(--border)]/60">
+        <MetaRow icon={<Target className="h-3 w-3" />} label="Target">
+          <code className="text-[11.5px] text-[var(--code-fg)] break-all">{data.anchorFqn || '—'}</code>
         </MetaRow>
-        <MetaRow icon={<Clock className="h-3.5 w-3.5" />} label="Schedule">
+        <MetaRow icon={<Clock className="h-3 w-3" />} label="Schedule">
           {isEditing ? (
             <select
               value={form.schedule}
               onChange={(e) => setForm(f => ({ ...f, schedule: e.target.value }))}
-              className="text-[12px] bg-[var(--surface-inset)] border border-[var(--border)] rounded-md px-2 py-1 text-[var(--text)] focus:outline-none focus:border-[var(--text)]"
+              className="text-[11.5px] bg-[var(--surface-inset)] border border-[var(--border)] rounded-md px-1.5 py-0.5 text-[var(--text)] focus:outline-none focus:border-[var(--text)]"
             >
               {SCHEDULE_OPTIONS.map(opt => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
           ) : (
-            <span className="text-[var(--text)]">
+            <span className="text-[12px] text-[var(--text)]">
               {formatCron(form.schedule)}
-              <span className="ml-1.5 text-[11px] text-[var(--muted)] font-mono">
+              <span className="ml-1.5 text-[10.5px] text-[var(--muted)] font-mono">
                 {`\`${form.schedule}\``}
               </span>
               {data.timezone && data.timezone !== 'UTC' ? (
-                <span className="ml-1.5 text-[11px] text-[var(--muted)]">({data.timezone})</span>
+                <span className="ml-1.5 text-[10.5px] text-[var(--muted)]">({data.timezone})</span>
               ) : null}
             </span>
           )}
@@ -207,28 +215,28 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel }: M
       </div>
 
       {/* MONITORS LIST */}
-      <div className="px-4 py-3 space-y-2">
-        <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-[var(--muted)]">
+      <div className="px-3 py-2.5 space-y-1.5">
+        <div className="flex items-center gap-1.5 text-[10.5px] uppercase tracking-wider text-[var(--muted)]">
           <Activity className="h-3 w-3" />
           {form.monitors.length} {form.monitors.length === 1 ? 'monitor' : 'monitors'}
         </div>
-        <ul className="space-y-1.5">
+        <ul className="space-y-1">
           {form.monitors.map((m: any, i: number) => {
             const kindRaw = m.monitor_type || m.monitorType || '';
             const target  = m.target_fqn || m.targetFqn || data.anchorFqn || '';
             return (
               <li
                 key={i}
-                className="flex items-baseline gap-3 text-[12.5px] py-1.5 px-2 rounded-md hover:bg-[var(--surface-inset)]/40"
+                className="flex items-baseline gap-2 text-[11.5px] py-1 px-1.5 rounded-md hover:bg-[var(--hover-bg)]"
               >
-                <span className="font-medium text-[var(--text)] min-w-[120px]">
+                <span className="font-medium text-[var(--text)] min-w-[90px]">
                   {prettyMonitorKind(kindRaw)}
                 </span>
-                <code className="text-[12px] text-indigo-300/80 truncate" title={target}>
+                <code className="text-[11px] text-[var(--code-fg)] truncate" title={target}>
                   {target}
                 </code>
                 {m.config && Object.keys(m.config).length > 0 ? (
-                  <span className="ml-auto text-[11px] text-[var(--muted)] font-mono">
+                  <span className="ml-auto text-[10.5px] text-[var(--muted)] font-mono">
                     {summariseConfig(m.config)}
                   </span>
                 ) : null}
@@ -238,8 +246,8 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel }: M
         </ul>
 
         {isEditing && hasAnomalyMonitor && data.anchorFqn ? (
-          <div className="mt-3 pt-3 border-t border-[var(--border)]/60">
-            <label className="text-[11px] uppercase tracking-wider text-[var(--muted)] mb-1.5 block">
+          <div className="mt-2.5 pt-2.5 border-t border-[var(--border)]/60">
+            <label className="text-[10.5px] uppercase tracking-wider text-[var(--muted)] mb-1 block">
               Anomaly column
             </label>
             <ColumnPicker
@@ -247,7 +255,7 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel }: M
               value={form.anomalyColumn}
               onChange={(col) => setForm(f => ({ ...f, anomalyColumn: col }))}
               numericOnly
-              className="w-full bg-[var(--surface-inset)] border border-[var(--border)] rounded-md px-2 py-1.5 text-[12px] text-[var(--text)] focus:outline-none focus:border-[var(--text)]"
+              className="w-full bg-[var(--surface-inset)] border border-[var(--border)] rounded-md px-2 py-1 text-[11.5px] text-[var(--text)] focus:outline-none focus:border-[var(--text)]"
             />
           </div>
         ) : null}
@@ -267,7 +275,10 @@ function StatusPill({
 }) {
   if (isExecuting) {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium text-[var(--muted)] bg-[var(--surface-inset)]">
+      <span
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10.5px] font-medium"
+        style={{ color: 'var(--neutral-fg)', backgroundColor: 'var(--neutral-bg)' }}
+      >
         <Loader2 className="h-3 w-3 animate-spin" />
         Creating
       </span>
@@ -275,7 +286,10 @@ function StatusPill({
   }
   if (isCompleted) {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium text-emerald-300 bg-emerald-500/10">
+      <span
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10.5px] font-medium"
+        style={{ color: 'var(--success-fg)', backgroundColor: 'var(--success-bg)' }}
+      >
         <Check className="h-3 w-3" />
         Created
       </span>
@@ -283,7 +297,10 @@ function StatusPill({
   }
   if (isFailed) {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium text-rose-300 bg-rose-500/10">
+      <span
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10.5px] font-medium"
+        style={{ color: 'var(--danger-fg)', backgroundColor: 'var(--danger-bg)' }}
+      >
         <X className="h-3 w-3" />
         Failed
       </span>
@@ -291,7 +308,10 @@ function StatusPill({
   }
   if (isCancelled) {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium text-[var(--muted)] bg-[var(--surface-inset)]">
+      <span
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10.5px] font-medium"
+        style={{ color: 'var(--neutral-fg)', backgroundColor: 'var(--neutral-bg)' }}
+      >
         <X className="h-3 w-3" />
         Cancelled
       </span>
@@ -299,7 +319,10 @@ function StatusPill({
   }
   if (isProposed) {
     return (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium text-amber-300 bg-amber-500/10">
+      <span
+        className="inline-flex items-center px-1.5 py-0.5 rounded text-[10.5px] font-medium"
+        style={{ color: 'var(--warning-fg)', backgroundColor: 'var(--warning-bg)' }}
+      >
         Proposed
       </span>
     );
@@ -316,7 +339,7 @@ function MetaRow({
 }) {
   return (
     <div className="flex items-baseline gap-2 min-w-0">
-      <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-[var(--muted)] shrink-0">
+      <span className="inline-flex items-center gap-1 text-[10.5px] uppercase tracking-wider text-[var(--muted)] shrink-0">
         {icon}
         {label}
       </span>

@@ -73,11 +73,17 @@ function GenericToolConfirmation({
     TOOL_DESCRIPTIONS[confirmation.toolName] || confirmation.description;
 
   return (
-    <div className="rounded-xl border border-amber-500/30 bg-[var(--surface)] my-2 overflow-hidden">
-      <div className="px-4 pt-4 pb-3 border-b border-[var(--border)]/60">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1 space-y-2">
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold tracking-wider text-amber-200 bg-amber-500/15">
+    <div
+      className="rounded-xl border bg-[var(--surface)] my-2 overflow-hidden max-w-[640px]"
+      style={{ borderColor: 'var(--warning-bg)' }}
+    >
+      <div className="px-3 pt-3 pb-2.5 border-b border-[var(--border)]/60">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wider"
+              style={{ color: 'var(--warning-fg)', backgroundColor: 'var(--warning-bg)' }}
+            >
               <AlertTriangle className="h-3 w-3" />
               CONFIRM
             </span>
@@ -85,7 +91,7 @@ function GenericToolConfirmation({
               {confirmation.toolName}
             </h3>
             {description ? (
-              <p className="text-[12.5px] text-[var(--muted)]">{description}</p>
+              <p className="text-[12px] text-[var(--muted)]">{description}</p>
             ) : null}
           </div>
 
@@ -93,7 +99,10 @@ function GenericToolConfirmation({
             type="button"
             onClick={onConfirm}
             disabled={isLoading}
-            className="inline-flex items-center gap-1 px-3 py-1 rounded-md text-[12px] font-medium text-emerald-100 bg-emerald-500/20 hover:bg-emerald-500/30 disabled:opacity-50 shrink-0"
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11.5px] font-medium disabled:opacity-50 shrink-0"
+            style={{ color: 'var(--success-fg)', backgroundColor: 'var(--success-bg)' }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--success-bg-strong)'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--success-bg)'; }}
           >
             <Check className="h-3 w-3" />
             {isLoading ? 'Executing…' : 'Approve'}
@@ -102,25 +111,27 @@ function GenericToolConfirmation({
       </div>
 
       {confirmation.arguments && Object.keys(confirmation.arguments).length > 0 ? (
-        <div className="px-4 py-3 border-b border-[var(--border)]/60">
-          <div className="text-[11px] uppercase tracking-wider text-[var(--muted)] mb-1.5">
+        <div className="px-3 py-2.5 border-b border-[var(--border)]/60">
+          <div className="text-[10.5px] uppercase tracking-wider text-[var(--muted)] mb-1">
             Arguments
           </div>
-          <pre className="text-[12px] font-mono text-[var(--text)] bg-[var(--surface-inset)] rounded-md px-3 py-2 max-h-[160px] overflow-auto whitespace-pre-wrap">
+          <pre className="text-[11.5px] font-mono text-[var(--text)] bg-[var(--surface-inset)] rounded-md px-2.5 py-1.5 max-h-[140px] overflow-auto whitespace-pre-wrap">
             {JSON.stringify(confirmation.arguments, null, 2)}
           </pre>
         </div>
       ) : null}
 
-      <div className="px-4 pb-3 pt-2 flex items-center justify-between gap-3">
-        <span className="text-[11px] uppercase tracking-wider text-[var(--muted)]">
+      <div className="px-3 pb-2.5 pt-1.5 flex items-center justify-between gap-3">
+        <span className="text-[10.5px] uppercase tracking-wider text-[var(--muted)]">
           Action requires confirmation
         </span>
         <button
           type="button"
           onClick={onDeny}
           disabled={isLoading}
-          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] text-[var(--muted)] hover:text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11.5px] text-[var(--muted)] hover:bg-[var(--hover-bg)] disabled:opacity-50"
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--danger-fg)'; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--muted)'; }}
         >
           <X className="h-3 w-3" />
           Deny

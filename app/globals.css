@@ -29,6 +29,22 @@
   --border-medium: rgba(255,255,255,0.10);
   --scrollbar: rgba(255,255,255,0.10);
   --scrollbar-hover: rgba(255,255,255,0.20);
+
+  /* Semantic accents — used by chat cards, badges, and status pills.
+     Picked to read on var(--surface) at >= 4.5:1 in both themes. */
+  --success-fg: #6ee7b7;
+  --success-bg: rgba(16,185,129,0.18);
+  --success-bg-strong: rgba(16,185,129,0.28);
+  --danger-fg:  #fda4af;
+  --danger-bg:  rgba(244,63,94,0.18);
+  --danger-bg-strong: rgba(244,63,94,0.28);
+  --warning-fg: #fcd34d;
+  --warning-bg: rgba(245,158,11,0.18);
+  --info-fg:    #93c5fd;
+  --info-bg:    rgba(59,130,246,0.18);
+  --neutral-fg: #d4d4d8;
+  --neutral-bg: rgba(255,255,255,0.08);
+  --code-fg:    #c7d2fe;
 }
 
 html.light {
@@ -58,6 +74,23 @@ html.light {
   --border-medium: rgba(0,0,0,0.10);
   --scrollbar: rgba(0,0,0,0.10);
   --scrollbar-hover: rgba(0,0,0,0.20);
+
+  /* Semantic accents — light-mode counterparts. Background tints stay near
+     the same hue but lower-alpha so they don't overpower white surfaces;
+     foregrounds shift to mid-700 shades for legibility on light backgrounds. */
+  --success-fg: #047857;
+  --success-bg: rgba(16,185,129,0.10);
+  --success-bg-strong: rgba(16,185,129,0.18);
+  --danger-fg:  #b91c1c;
+  --danger-bg:  rgba(244,63,94,0.10);
+  --danger-bg-strong: rgba(244,63,94,0.18);
+  --warning-fg: #b45309;
+  --warning-bg: rgba(245,158,11,0.12);
+  --info-fg:    #1d4ed8;
+  --info-bg:    rgba(59,130,246,0.10);
+  --neutral-fg: #525252;
+  --neutral-bg: rgba(0,0,0,0.05);
+  --code-fg:    #4338ca;
 }
 
 * { box-sizing: border-box; }

@@ -94,14 +94,14 @@ function CreateMonitorPreview({
     <Shell tone="propose" onDeny={onDeny} isLoading={isLoading}>
       <Header
         action="CREATE"
-        actionTint="text-emerald-200 bg-emerald-500/15"
+        actionTone="success"
         title={
           isEditing ? (
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full text-[15px] font-medium bg-transparent border-b border-[var(--border)] focus:border-[var(--text)] outline-none px-0 py-1 text-[var(--text)]"
+              className="w-full text-[14px] font-medium bg-transparent border-b border-[var(--border)] focus:border-[var(--text)] outline-none px-0 py-1 text-[var(--text)]"
               autoFocus
             />
           ) : name
@@ -109,32 +109,32 @@ function CreateMonitorPreview({
         onToggleEdit={() => setIsEditing(v => !v)}
         isEditing={isEditing}
         onConfirm={handleConfirm}
-        confirmLabel={isLoading ? 'Creating…' : 'Approve & Create'}
+        confirmLabel={isLoading ? 'Creating…' : 'Approve'}
         confirmDisabled={isLoading}
       />
 
       <MetaGrid>
-        <MetaRow icon={<Target className="h-3.5 w-3.5" />} label="Target">
-          <code className="text-[12px] text-indigo-300 break-all">{targetFqn || '—'}</code>
+        <MetaRow icon={<Target className="h-3 w-3" />} label="Target">
+          <code className="text-[11.5px] text-[var(--code-fg)] break-all">{targetFqn || '—'}</code>
         </MetaRow>
-        <MetaRow icon={<Activity className="h-3.5 w-3.5" />} label="Kind">
-          <span className="text-[var(--text)]">{prettyMonitorKind(monitorKind)}</span>
+        <MetaRow icon={<Activity className="h-3 w-3" />} label="Kind">
+          <span className="text-[var(--text)] text-[12px]">{prettyMonitorKind(monitorKind)}</span>
         </MetaRow>
-        <MetaRow icon={<Clock className="h-3.5 w-3.5" />} label="Schedule">
+        <MetaRow icon={<Clock className="h-3 w-3" />} label="Schedule">
           {isEditing ? (
             <select
               value={schedule}
               onChange={(e) => setSchedule(e.target.value)}
-              className="text-[12px] bg-[var(--surface-inset)] border border-[var(--border)] rounded-md px-2 py-1 text-[var(--text)] focus:outline-none focus:border-[var(--text)]"
+              className="text-[11.5px] bg-[var(--surface-inset)] border border-[var(--border)] rounded-md px-1.5 py-0.5 text-[var(--text)] focus:outline-none focus:border-[var(--text)]"
             >
               {SCHEDULE_OPTIONS.map(opt => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
           ) : (
-            <span className="text-[var(--text)]">
+            <span className="text-[12px] text-[var(--text)]">
               {formatCron(schedule)}
-              <span className="ml-1.5 text-[11px] text-[var(--muted)] font-mono">{`\`${schedule}\``}</span>
+              <span className="ml-1.5 text-[10.5px] text-[var(--muted)] font-mono">{`\`${schedule}\``}</span>
             </span>
           )}
         </MetaRow>
@@ -188,18 +188,18 @@ function UpdateMonitorPreview({
     <Shell tone="propose" onDeny={onDeny} isLoading={isLoading}>
       <Header
         action="UPDATE"
-        actionTint="text-blue-200 bg-blue-500/15"
+        actionTone="info"
         title="Update monitor config"
         onToggleEdit={() => setIsEditing(v => !v)}
         isEditing={isEditing}
         onConfirm={handleConfirm}
-        confirmLabel={isLoading ? 'Updating…' : 'Approve & Update'}
+        confirmLabel={isLoading ? 'Updating…' : 'Approve'}
         confirmDisabled={isLoading}
       />
 
       <MetaGrid>
-        <MetaRow icon={<Target className="h-3.5 w-3.5" />} label="Monitor id">
-          <code className="text-[12px] text-indigo-300 break-all">{monitorId}</code>
+        <MetaRow icon={<Target className="h-3 w-3" />} label="Monitor id">
+          <code className="text-[11.5px] text-[var(--code-fg)] break-all">{monitorId}</code>
         </MetaRow>
       </MetaGrid>
 
@@ -233,19 +233,20 @@ function DeleteMonitorPreview({
     <Shell tone="destructive" onDeny={onDeny} isLoading={isLoading}>
       <Header
         action="DELETE"
-        actionTint="text-rose-200 bg-rose-500/20"
+        actionTone="danger"
         title="Delete monitor"
         onConfirm={() => onConfirm()}
-        confirmLabel={isLoading ? 'Deleting…' : 'Approve & Delete'}
+        confirmLabel={isLoading ? 'Deleting…' : 'Approve'}
         confirmTone="destructive"
         confirmDisabled={isLoading}
       />
 
-      <div className="flex items-start gap-2 text-[13px] text-rose-300 rounded-md bg-rose-500/10 border border-rose-500/30 px-3 py-2">
-        <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+      <div className="px-3 py-2.5 mx-3 mb-3 mt-2 flex items-start gap-2 text-[12px] rounded-md border"
+           style={{ color: 'var(--danger-fg)', backgroundColor: 'var(--danger-bg)', borderColor: 'var(--danger-bg-strong)' }}>
+        <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
         <div>
           This will permanently delete monitor{' '}
-          <code className="text-rose-200 font-mono text-[12px]">{monitorId}</code>. The
+          <code className="font-mono text-[11.5px]" style={{ color: 'var(--danger-fg)' }}>{monitorId}</code>. The
           monitor will stop running immediately and cannot be restored.
         </div>
       </div>
@@ -268,19 +269,25 @@ function Shell({
   isLoading: boolean;
   children: React.ReactNode;
 }) {
-  const borderTint = tone === 'destructive' ? 'border-rose-500/30' : 'border-amber-500/30';
+  const borderColor = tone === 'destructive' ? 'var(--danger-bg-strong)' : 'var(--warning-bg)';
   return (
-    <div className={`rounded-xl border ${borderTint} bg-[var(--surface)] my-2 overflow-hidden`}>
+    <div
+      className="rounded-xl border bg-[var(--surface)] my-2 overflow-hidden max-w-[640px]"
+      style={{ borderColor }}
+    >
       {children}
-      <div className="px-4 pb-3 pt-1 flex items-center justify-between gap-3">
-        <span className="text-[11px] uppercase tracking-wider text-[var(--muted)]">
+      <div className="px-3 pb-2.5 pt-1.5 flex items-center justify-between gap-3 border-t border-[var(--border)]/50">
+        <span className="text-[10.5px] uppercase tracking-wider text-[var(--muted)]">
           Action requires confirmation
         </span>
         <button
           type="button"
           onClick={onDeny}
           disabled={isLoading}
-          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] text-[var(--muted)] hover:text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11.5px] text-[var(--muted)] hover:bg-[var(--hover-bg)] disabled:opacity-50"
+          style={{ ['--hover-fg' as any]: 'var(--danger-fg)' }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--danger-fg)'; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--muted)'; }}
         >
           <X className="h-3 w-3" />
           Deny
@@ -290,9 +297,21 @@ function Shell({
   );
 }
 
+type Tone = 'success' | 'info' | 'danger' | 'warning' | 'neutral';
+
+function toneStyle(tone: Tone): React.CSSProperties {
+  switch (tone) {
+    case 'success': return { color: 'var(--success-fg)', backgroundColor: 'var(--success-bg)' };
+    case 'info':    return { color: 'var(--info-fg)',    backgroundColor: 'var(--info-bg)' };
+    case 'danger':  return { color: 'var(--danger-fg)',  backgroundColor: 'var(--danger-bg)' };
+    case 'warning': return { color: 'var(--warning-fg)', backgroundColor: 'var(--warning-bg)' };
+    case 'neutral': return { color: 'var(--neutral-fg)', backgroundColor: 'var(--neutral-bg)' };
+  }
+}
+
 function Header({
   action,
-  actionTint,
+  actionTone,
   title,
   onToggleEdit,
   isEditing,
@@ -302,7 +321,7 @@ function Header({
   confirmDisabled,
 }: {
   action: string;
-  actionTint: string;
+  actionTone: Tone;
   title: React.ReactNode;
   onToggleEdit?: () => void;
   isEditing?: boolean;
@@ -311,19 +330,23 @@ function Header({
   confirmTone?: 'destructive';
   confirmDisabled?: boolean;
 }) {
-  const confirmClass =
-    confirmTone === 'destructive'
-      ? 'text-rose-100 bg-rose-500/20 hover:bg-rose-500/30'
-      : 'text-emerald-100 bg-emerald-500/20 hover:bg-emerald-500/30';
+  const isDelete = confirmTone === 'destructive';
+  const confirmStyle: React.CSSProperties = isDelete
+    ? { color: 'var(--danger-fg)', backgroundColor: 'var(--danger-bg)' }
+    : { color: 'var(--success-fg)', backgroundColor: 'var(--success-bg)' };
+  const confirmHoverBg = isDelete ? 'var(--danger-bg-strong)' : 'var(--success-bg-strong)';
 
   return (
-    <div className="px-4 pt-4 pb-3 border-b border-[var(--border)]/60">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 space-y-2">
-          <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold tracking-wider ${actionTint}`}>
+    <div className="px-3 pt-3 pb-2.5 border-b border-[var(--border)]/60">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <span
+            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wider"
+            style={toneStyle(actionTone)}
+          >
             {action}
           </span>
-          <h3 className="text-[15px] font-medium text-[var(--text)] leading-tight">{title}</h3>
+          <div className="text-[14px] font-medium text-[var(--text)] leading-tight">{title}</div>
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
@@ -331,7 +354,7 @@ function Header({
             <button
               type="button"
               onClick={onToggleEdit}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-inset)]"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11.5px] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--hover-bg)]"
             >
               <Pencil className="h-3 w-3" />
               {isEditing ? 'Done' : 'Edit'}
@@ -341,9 +364,12 @@ function Header({
             type="button"
             onClick={onConfirm}
             disabled={confirmDisabled}
-            className={`inline-flex items-center gap-1 px-3 py-1 rounded-md text-[12px] font-medium ${confirmClass} disabled:opacity-50`}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11.5px] font-medium disabled:opacity-50"
+            style={confirmStyle}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = confirmHoverBg; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = confirmStyle.backgroundColor as string; }}
           >
-            {confirmTone === 'destructive' ? <Trash2 className="h-3 w-3" /> : <Check className="h-3 w-3" />}
+            {isDelete ? <Trash2 className="h-3 w-3" /> : <Check className="h-3 w-3" />}
             {confirmLabel}
           </button>
         </div>
@@ -354,7 +380,7 @@ function Header({
 
 function MetaGrid({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-4 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 border-b border-[var(--border)]/60 text-[13px]">
+    <div className="px-3 py-2.5 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 border-b border-[var(--border)]/60">
       {children}
     </div>
   );
@@ -369,7 +395,7 @@ function MetaRow({
 }) {
   return (
     <div className="flex items-baseline gap-2 min-w-0">
-      <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-[var(--muted)] shrink-0">
+      <span className="inline-flex items-center gap-1 text-[10.5px] uppercase tracking-wider text-[var(--muted)] shrink-0">
         {icon}
         {label}
       </span>
@@ -394,8 +420,8 @@ function ConfigBlock({
   label?: string;
 }) {
   return (
-    <div className="px-4 py-3">
-      <div className="text-[11px] uppercase tracking-wider text-[var(--muted)] mb-1.5">
+    <div className="px-3 py-2.5">
+      <div className="text-[10.5px] uppercase tracking-wider text-[var(--muted)] mb-1">
         {label}
       </div>
       {isEditing ? (
@@ -403,20 +429,19 @@ function ConfigBlock({
           <textarea
             value={configText}
             onChange={(e) => onChange(e.target.value)}
-            rows={Math.min(8, Math.max(3, configText.split('\n').length))}
-            className="w-full text-[12px] font-mono bg-[var(--surface-inset)] border border-[var(--border)] rounded-md px-2 py-1.5 text-[var(--text)] focus:outline-none focus:border-[var(--text)] resize-y"
+            rows={Math.min(6, Math.max(2, configText.split('\n').length))}
+            className="w-full text-[11.5px] font-mono bg-[var(--surface-inset)] border border-[var(--border)] rounded-md px-2 py-1.5 text-[var(--text)] focus:outline-none focus:border-[var(--text)] resize-y"
             spellCheck={false}
           />
           {configError ? (
-            <div className="mt-1 text-[11px] text-rose-300">{configError}</div>
+            <div className="mt-1 text-[10.5px]" style={{ color: 'var(--danger-fg)' }}>{configError}</div>
           ) : null}
         </>
       ) : (
-        <div className="text-[12px] text-[var(--text)] font-mono bg-[var(--surface-inset)] rounded-md px-3 py-2">
+        <div className="text-[11.5px] text-[var(--text)] font-mono bg-[var(--surface-inset)] rounded-md px-2.5 py-1.5">
           {configSummary}
         </div>
       )}
     </div>
   );
 }
-
