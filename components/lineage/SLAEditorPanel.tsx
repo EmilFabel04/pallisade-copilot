@@ -9,12 +9,20 @@ import type {
 } from '@/types/sla';
 import { categoryToSLADomain, DOMAIN_SLA_SECTIONS, type SLADomain } from '@/types/sla';
 import { useClarifications } from '@/components/clarifications/ClarificationProvider';
+import { fetchContextRequest } from '@/lib/clarifications/client';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 export type ApplyScope = 'selected' | 'downstream' | 'all_of_type';
+
+type BulkSlot =
+  | { tableFqn: string; platform: string; engineId: string; status: 'analyzing' }
+  | { tableFqn: string; platform: string; engineId: string; status: 'computing'; plan: Record<string, any> }
+  | { tableFqn: string; platform: string; engineId: string; status: 'awaiting'; plan: Record<string, any>; clarificationIds: string[] }
+  | { tableFqn: string; platform: string; engineId: string; status: 'ready'; result: any }
+  | { tableFqn: string; platform: string; engineId: string; status: 'error'; message: string };
 
 interface SLAEditorPanelProps {
   selectedNodeIds: Set<string>;
@@ -191,7 +199,7 @@ export function SLAEditorPanel({
   const [applyScope, setApplyScope] = useState<ApplyScope>('selected');
   const [applied, setApplied] = useState(false);
   const prevSavingRef = React.useRef(false);
-  const { openPopup: openClarificationPopup } = useClarifications();
+  const { openPopup: openClarificationPopup, requestsById } = useClarifications();
 
   const [bulkDiscoveryState, setBulkDiscoveryState] = useState<'idle' | 'loading' | 'results'>('idle');
   const [bulkResults, setBulkResults] = useState<Array<{
@@ -205,12 +213,75 @@ export function SLAEditorPanel({
     uniqueness?: any;
   }>>([]);
   const [bulkPage, setBulkPage] = useState(0);
+  const [bulkSlots, setBulkSlots] = useState<Record<string, BulkSlot>>({});
 
   useEffect(() => {
     setBulkDiscoveryState('idle');
     setBulkResults([]);
     setBulkPage(0);
+    setBulkSlots({});
   }, [selectedNodeIds]);
+
+  // When all slots finish (ready or error), flip legacy bulkResults + bulkDiscoveryState
+  useEffect(() => {
+    const slots = Object.values(bulkSlots);
+    if (slots.length === 0) return;
+    const allDone = slots.every((s) => s.status === 'ready');
+    if (allDone) {
+      setBulkResults(slots.map((s: any) => s.result));
+      setBulkDiscoveryState('results');
+    }
+  }, [bulkSlots]);
+
+  // Watch clarification answers; fire compute for each awaiting slot once all its IDs are answered
+  useEffect(() => {
+    const awaitingSlots = Object.values(bulkSlots).filter(
+      (s): s is Extract<BulkSlot, { status: 'awaiting' }> => s.status === 'awaiting',
+    );
+    if (awaitingSlots.length === 0) return;
+
+    for (const slot of awaitingSlots) {
+      const allAnswered = slot.clarificationIds.every(
+        (id) => requestsById[id]?.status === 'answered',
+      );
+      if (!allAnswered) continue;
+
+      // Build answers map from the answered ContextRequests' answer payloads.
+      (async () => {
+        const answers: Record<string, unknown> = {};
+        await Promise.all(
+          slot.clarificationIds.map(async (id) => {
+            try {
+              const r = await fetchContextRequest(id);
+              answers[id] = r.answer;
+            } catch {
+              answers[id] = null;
+            }
+          }),
+        );
+        // Mark this slot as 'computing' to avoid duplicate fires.
+        setBulkSlots((prev) => {
+          if (prev[slot.tableFqn]?.status !== 'awaiting') return prev;
+          return {
+            ...prev,
+            [slot.tableFqn]: {
+              tableFqn: slot.tableFqn,
+              platform: slot.platform,
+              engineId: slot.engineId,
+              status: 'computing',
+              plan: slot.plan,
+            },
+          };
+        });
+        await runComputeBulk(
+          [{ tableFqn: slot.tableFqn, platform: slot.platform, plan: slot.plan }],
+          { [slot.tableFqn]: answers },
+        );
+      })();
+    }
+    // requestsById is the trigger — adding bulkSlots to deps would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestsById]);
 
   // Flat values state — initialized from discoveryDefaults when provided
   const [values, setValues] = useState<Record<string, any>>(() => {
@@ -357,32 +428,133 @@ export function SLAEditorPanel({
     onApply(request, applyScope);
   }, [hasAnyValues, hasDiscovery, selectedNodes, applyScope, onApply, values]);
 
-  const handleBulkDiscover = useCallback(async () => {
-    setBulkDiscoveryState('loading');
-    try {
-      // Send node metadata so discovery works without a fresh lineage graph
-      const nodes = discoverableNodes.map((n) => ({
-        id: n.id.replace(/^lineage-/, ''),
-        platform: n.platforms?.[0] || undefined,
-        tableFqn: n.fullName || undefined,
-      }));
-      const engineIds = nodes.map((n) => n.id);
-      const res = await fetch('/api/nodes/sla/discover-bulk', {
+  const runComputeBulk = useCallback(
+    async (
+      items: Array<{ tableFqn: string; platform: string; plan: Record<string, any> }>,
+      answersByTable: Record<string, Record<string, unknown>>,
+    ) => {
+      const res = await fetch('/api/nodes/sla/discover-bulk/compute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nodeIds: engineIds, stackId, nodes }),
+        body: JSON.stringify({
+          stackId,
+          items: items.map((it) => ({
+            platform: it.platform,
+            tableFqn: it.tableFqn,
+            plan: it.plan,
+            answers: answersByTable[it.tableFqn] ?? {},
+          })),
+        }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        setBulkResults(data.results || []);
-        setBulkDiscoveryState('results');
-      } else {
+
+      if (!res.ok) return;
+
+      const data = await res.json();
+      const computeResults: any[] = data.results ?? [];
+
+      setBulkSlots((prev) => {
+        const next = { ...prev };
+        for (const r of computeResults) {
+          const slot = next[r.node_fqn];
+          if (slot) {
+            next[r.node_fqn] = {
+              tableFqn: slot.tableFqn,
+              platform: slot.platform,
+              engineId: slot.engineId,
+              status: 'ready',
+              result: r,
+            };
+          }
+        }
+        return next;
+      });
+    },
+    [stackId],
+  );
+
+  const handleBulkDiscover = useCallback(async () => {
+    if (discoverableNodes.length === 0) return;
+    setBulkDiscoveryState('loading');
+    setBulkResults([]);
+    setBulkSlots({});
+
+    const inputNodes = discoverableNodes
+      .map((n) => ({
+        engineId: n.id.replace(/^lineage-/, ''),
+        platform: n.platforms?.[0] || '',
+        tableFqn: n.fullName || '',
+      }))
+      .filter((n) => n.platform && n.tableFqn);
+
+    // Seed slots in 'analyzing' state.
+    const initialSlots: Record<string, BulkSlot> = {};
+    for (const n of inputNodes) {
+      initialSlots[n.tableFqn] = { ...n, status: 'analyzing' };
+    }
+    setBulkSlots(initialSlots);
+
+    try {
+      const res = await fetch('/api/nodes/sla/discover-bulk/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stackId,
+          nodes: inputNodes.map((n) => ({ platform: n.platform, tableFqn: n.tableFqn })),
+        }),
+      });
+
+      if (!res.ok) {
         setBulkDiscoveryState('idle');
+        return;
+      }
+
+      const data = await res.json();
+      const analyzeResults: Array<{
+        table_fqn: string;
+        status: string;
+        plan: Record<string, any>;
+        clarification_ids: string[];
+      }> = data.results ?? [];
+
+      // Fan out the analyze results.
+      const updatedSlots: Record<string, BulkSlot> = { ...initialSlots };
+      const readyForCompute: Array<{ tableFqn: string; platform: string; plan: Record<string, any> }> = [];
+
+      for (const r of analyzeResults) {
+        const seed = initialSlots[r.table_fqn];
+        if (!seed) continue;
+        if (r.plan?.unsupported) {
+          updatedSlots[r.table_fqn] = {
+            ...seed,
+            status: 'ready',
+            result: {
+              node_fqn: r.table_fqn,
+              unsupported: true,
+              skipped_reason: r.plan.skipped_reason || 'unsupported',
+            },
+          };
+        } else if (r.status === 'ready') {
+          updatedSlots[r.table_fqn] = { ...seed, status: 'computing', plan: r.plan };
+          readyForCompute.push({ tableFqn: r.table_fqn, platform: seed.platform, plan: r.plan });
+        } else {
+          updatedSlots[r.table_fqn] = {
+            ...seed,
+            status: 'awaiting',
+            plan: r.plan,
+            clarificationIds: r.clarification_ids,
+          };
+        }
+      }
+      setBulkSlots(updatedSlots);
+
+      // Fire compute-bulk for the ready ones immediately.
+      if (readyForCompute.length > 0) {
+        await runComputeBulk(readyForCompute, {});
       }
     } catch {
       setBulkDiscoveryState('idle');
     }
-  }, [discoverableNodes, stackId]);
+  }, [discoverableNodes, stackId, runComputeBulk]);
 
   const handleApplyAll = useCallback(() => {
     if (!onApplyBulkDiscovery) return;
@@ -498,6 +670,28 @@ export function SLAEditorPanel({
           <p className="text-[11px] text-[var(--muted)] mt-1">Querying warehouse metadata</p>
         </div>
       )}
+
+      {/* Per-node progress banner shown once analyze returns and slots are seeded */}
+      {bulkDiscoveryState === 'loading' && Object.keys(bulkSlots).length > 0 && (() => {
+        const slots = Object.values(bulkSlots);
+        const ready = slots.filter((s) => s.status === 'ready').length;
+        const awaiting = slots.filter((s) => s.status === 'awaiting').length;
+        const computing = slots.filter((s) => s.status === 'computing' || s.status === 'analyzing').length;
+        const total = slots.length;
+
+        return (
+          <div className="mt-2 p-3 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-faint)]">
+            <p className="text-[12px] text-[var(--muted)]">
+              Computing {computing} of {total} · {awaiting} awaiting input · {ready} ready
+            </p>
+            {awaiting > 0 && (
+              <p className="text-[11px] text-amber-300 mt-1.5">
+                {awaiting} table{awaiting === 1 ? '' : 's'} need column choices. Answer them in the clarification panel to continue.
+              </p>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Bulk discovery results — paginated, 5 at a time */}
       {bulkDiscoveryState === 'results' && (() => {
