@@ -166,3 +166,12 @@ def test_analyze_skips_when_no_columns():
     )
     assert result.plan.unsupported is True
     assert result.plan.skipped_reason
+
+
+import scanner.lineage.sla_discovery as sd
+
+
+def test_compute_volume_does_not_reference_emit():
+    import inspect
+    source = inspect.getsource(sd._compute_volume)
+    assert "_try_emit_timestamp_clarification" not in source

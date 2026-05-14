@@ -184,74 +184,125 @@ def test_emit_calls_nextjs_when_low_confidence():
 
 
 # ---------------------------------------------------------------------------
-# _compute_volume marks tentative on low-confidence emit
+# _compute_volume is pure — no clarification side effects
 # ---------------------------------------------------------------------------
 
-def test_compute_volume_marks_tentative_when_clarification_emitted():
+def _daily_rows(n: int = 100) -> list:
+    """Return three days of fake daily-count rows in the format execute_query yields."""
+    return [
+        {"day": "2026-05-13", "row_count": n},
+        {"day": "2026-05-12", "row_count": n},
+        {"day": "2026-05-11", "row_count": n},
+    ]
+
+
+def test_compute_volume_does_not_emit_clarification_even_with_pipeline_stack():
+    # Low-confidence column + pipeline_stack_id supplied: old code would emit.
+    # New code must NOT emit anything — clarification is the caller's job.
     adapter = _adapter_with([
         _col("weird_ts", "TIMESTAMP"),
         _col("id", "INT64"),
     ])
+    adapter.execute_query.return_value = _daily_rows()
     metadata = {"row_count": 1000}
     with patch(
         "scanner.lineage.sla_discovery._call_nextjs_create_context_request"
     ) as mock_call:
-        mock_call.return_value = {"context_request_id": "cr_42", "suppressed": False}
         result = _compute_volume(
             adapter,
             "raw.orders",
             metadata=metadata,
+            timestamp_column="weird_ts",
             pipeline_stack_id="ps_1",
             organization_id="org_1",
         )
     assert result is not None
-    assert result.get("tentative") is True
-    assert result.get("context_request_id") == "cr_42"
+    assert mock_call.call_count == 0
+    assert "tentative" not in result
+    assert "context_request_id" not in result
     assert result["currentRows"] == 1000
 
 
-def test_compute_volume_not_tentative_when_no_pipeline_stack():
+def test_compute_volume_does_not_emit_clarification_without_pipeline_stack():
+    # Passing no pipeline_stack_id also must produce zero emissions.
     adapter = _adapter_with([
         _col("weird_ts", "TIMESTAMP"),
         _col("id", "INT64"),
     ])
+    adapter.execute_query.return_value = _daily_rows()
     metadata = {"row_count": 1000}
     with patch(
         "scanner.lineage.sla_discovery._call_nextjs_create_context_request"
     ) as mock_call:
-        # No pipeline_stack_id → emit is short-circuited and Next.js not called.
         result = _compute_volume(
             adapter,
             "raw.orders",
             metadata=metadata,
+            timestamp_column="weird_ts",
             pipeline_stack_id=None,
             organization_id=None,
         )
     assert result is not None
     assert "tentative" not in result
     assert "context_request_id" not in result
-    mock_call.assert_not_called()
+    assert mock_call.call_count == 0
 
 
-def test_compute_volume_not_tentative_when_suppressed():
+def test_compute_volume_falls_back_to_picker_when_no_timestamp_column():
+    # When timestamp_column is not supplied, the picker is called as a fallback
+    # and still no clarification is emitted.
     adapter = _adapter_with([
-        _col("weird_ts", "TIMESTAMP"),
+        _col("loaded_at", "TIMESTAMP"),
         _col("id", "INT64"),
     ])
-    metadata = {"row_count": 1000}
+    adapter.execute_query.return_value = _daily_rows()
     with patch(
         "scanner.lineage.sla_discovery._call_nextjs_create_context_request"
     ) as mock_call:
-        # Next.js says "suppressed" because the user recently dismissed.
-        mock_call.return_value = {"context_request_id": None, "suppressed": True}
         result = _compute_volume(
             adapter,
             "raw.orders",
-            metadata=metadata,
-            pipeline_stack_id="ps_1",
-            organization_id="org_1",
+            metadata=None,
         )
     assert result is not None
-    # Suppressed → don't surface tentative; respect the dismissal cooldown.
+    assert result.get("enabled") is True
+    assert result.get("timeColumn") == "loaded_at"
+    assert mock_call.call_count == 0
+
+
+def test_compute_volume_does_not_emit_clarification():
+    adapter = _adapter_with([_col("ts", "TIMESTAMP")])
+    adapter.execute_query.return_value = [
+        {"day": "2026-05-13", "row_count": 100},
+        {"day": "2026-05-12", "row_count": 105},
+        {"day": "2026-05-11", "row_count": 98},
+    ]
+    with patch(
+        "scanner.lineage.sla_discovery._call_nextjs_create_context_request"
+    ) as mock_emit:
+        result = _compute_volume(
+            adapter,
+            "proj.ds.t",
+            metadata={"row_count": 1000},
+            timestamp_column="ts",
+        )
+    assert mock_emit.call_count == 0
     assert "tentative" not in result
     assert "context_request_id" not in result
+
+
+def test_compute_volume_uses_supplied_timestamp_column():
+    adapter = _adapter_with([_col("ts", "TIMESTAMP"), _col("alt", "TIMESTAMP")])
+    captured = {}
+
+    def fake_query(sql):
+        captured["sql"] = sql
+        return [
+            {"day": "2026-05-13", "row_count": 1},
+            {"day": "2026-05-12", "row_count": 2},
+            {"day": "2026-05-11", "row_count": 3},
+        ]
+
+    adapter.execute_query.side_effect = fake_query
+    _compute_volume(adapter, "proj.ds.t", metadata=None, timestamp_column="alt")
+    assert "alt" in captured["sql"]

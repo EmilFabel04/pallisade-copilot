@@ -856,8 +856,9 @@ def _compute_volume(
     table_fqn: str,
     metadata: Optional[Dict[str, Any]] = None,
     *,
-    pipeline_stack_id: Optional[str] = None,
-    organization_id: Optional[str] = None,
+    timestamp_column: Optional[str] = None,
+    pipeline_stack_id: Optional[str] = None,  # kept for legacy signature compat; UNUSED
+    organization_id: Optional[str] = None,    # kept for legacy signature compat; UNUSED
 ) -> Optional[Dict[str, Any]]:
     """Derive expected daily volume thresholds from historical row counts.
 
@@ -876,41 +877,30 @@ def _compute_volume(
     Refusing to fall back to a static total is intentional — comparing a
     daily threshold against a lifetime total produces meaningless checks.
 
-    When ``pipeline_stack_id`` is supplied and the timestamp picker's
-    confidence falls below ``CONFIG.confidence_threshold``, this function
-    asks Next.js to create a ``timestamp_choice`` ContextRequest so the
-    user can disambiguate. The discovery result is then marked
-    ``tentative=True`` and carries a ``context_request_id`` the UI can
-    surface.
+    When ``timestamp_column`` is supplied, it is used directly. Otherwise
+    the picker ``_pick_volume_timestamp_column`` is called as a fallback so
+    legacy direct callers continue to work. Clarification emission is NOT
+    done here — that responsibility belongs to the caller (e.g.
+    ``analyze_sla``).
     """
     logger.info(
-        "[Clarifications] _compute_volume entered for %s (pipeline_stack_id=%s, has_metadata=%s)",
-        table_fqn, pipeline_stack_id, metadata is not None,
+        "[Clarifications] _compute_volume entered for %s (has_metadata=%s)",
+        table_fqn, metadata is not None,
     )
 
     count = metadata.get("row_count") if metadata else None
     current_rows = int(count) if count is not None and count >= 0 else None
 
-    # Run the picker + clarification emit regardless of how the rest of
-    # discovery turns out. The column-choice question is meaningful even
-    # for empty tables (future loads still need to be bucketed correctly).
-    pick = _pick_volume_timestamp_column(adapter, table_fqn)
-    clarification = _try_emit_timestamp_clarification(
-        table_fqn=table_fqn,
-        pick=pick,
-        pipeline_stack_id=pipeline_stack_id,
-        organization_id=organization_id,
-    )
+    # Resolve the timestamp column: use the supplied one if given, else fall
+    # back to the picker (preserving legacy behaviour for direct callers).
+    if timestamp_column is not None:
+        ts_col: Optional[str] = timestamp_column
+    else:
+        pick = _pick_volume_timestamp_column(adapter, table_fqn)
+        ts_col = pick.column
 
-    def _attach_clarification(payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Tag the result with tentative + context_request_id when one was emitted."""
-        if clarification and clarification.get("context_request_id") and not clarification.get("suppressed"):
-            payload["tentative"] = True
-            payload["context_request_id"] = clarification["context_request_id"]
-        return payload
-
-    if pick.column is None:
-        return _attach_clarification({
+    if ts_col is None:
+        return {
             "enabled": False,
             "disabledReason": (
                 "No timestamp/date column found — daily volume cannot be "
@@ -918,26 +908,24 @@ def _compute_volume(
                 "created_at, or disable volume monitoring for this table."
             ),
             **({"currentRows": current_rows} if current_rows is not None else {}),
-        })
-
-    ts_col = pick.column
+        }
 
     daily_result = _get_daily_row_counts(adapter, table_fqn, ts_col)
     if not daily_result.get("ok"):
-        return _attach_clarification({
+        return {
             "enabled": False,
             "disabledReason": daily_result.get("reason") or (
                 f"Daily-volume query against `{ts_col}` returned no rows."
             ),
             "timeColumn": ts_col,
             **({"currentRows": current_rows} if current_rows is not None else {}),
-        })
+        }
 
     daily: List[int] = daily_result["counts"]
     includes_today = daily_result.get("includesToday", False)
 
     if len(daily) < 3:
-        return _attach_clarification({
+        return {
             "enabled": False,
             "disabledReason": (
                 f"Only {len(daily)} day(s) of history under `{ts_col}` — "
@@ -947,7 +935,7 @@ def _compute_volume(
             "timeColumn": ts_col,
             "dataPoints": len(daily),
             **({"currentRows": current_rows} if current_rows is not None else {}),
-        })
+        }
 
     # When the latest bucket is today's partial day, drop it from the
     # statistics — a half-day count would bias both ``avg`` and ``stddev``
@@ -983,7 +971,7 @@ def _compute_volume(
         result["partialToday"] = True
     if current_rows is not None:
         result["currentRows"] = current_rows
-    return _attach_clarification(result)
+    return result
 
 
 # ---------------------------------------------------------------------------
