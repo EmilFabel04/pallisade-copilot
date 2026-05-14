@@ -63,54 +63,67 @@ function buildOpeningMessage(req: ContextRequest): string | null {
 export function ClarificationPopup() {
   const { popupOpen, closePopup, requests, focusedId, setFocusedId, refresh } =
     useClarifications();
-  const [messages, setMessages] = useState<ChatMsg[]>([]);
-  const [input, setInput] = useState('');
-  const [sending, setSending] = useState(false);
-  const [loadingQuestion, setLoadingQuestion] = useState(false);
+  // Per-clarification chat history. Each request id owns its own thread so
+  // navigating between questions never lets a pending reply land in the wrong
+  // chat, and prior context is preserved if the user comes back.
+  const [chats, setChats] = useState<Record<string, ChatMsg[]>>({});
+  const [inputByChat, setInputByChat] = useState<Record<string, string>>({});
+  const [sendingId, setSendingId] = useState<string | null>(null);
+  const [loadingQuestionId, setLoadingQuestionId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const open = requests.filter((r) => r.status === 'open');
   const focusIdx = focusedId ? open.findIndex((r) => r.id === focusedId) : 0;
   const focused = open[Math.max(0, focusIdx)] ?? null;
+  const focusedKey = focused?.id ?? '';
+  const messages = chats[focusedKey] ?? [];
+  const input = inputByChat[focusedKey] ?? '';
+  const sending = sendingId === focusedKey;
+  const loadingQuestion = loadingQuestionId === focusedKey;
 
   useEffect(() => {
-    if (!popupOpen || !focused) {
-      setMessages([]);
-      setLoadingQuestion(false);
-      return;
-    }
+    if (!popupOpen || !focused) return;
+    // Already seeded — don't re-fetch when navigating back to a thread.
+    if (chats[focused.id] && chats[focused.id].length > 0) return;
 
     // Fast path: payload-driven question — render immediately, no LLM call.
     const direct = buildOpeningMessage(focused);
     if (direct !== null) {
-      setMessages([{ role: 'assistant', content: direct }]);
-      setLoadingQuestion(false);
+      setChats((prev) => ({ ...prev, [focused.id]: [{ role: 'assistant', content: direct }] }));
       return;
     }
 
-    // Fallback: kinds we don't know how to render directly fall through to
-    // the LLM chat. Show a clean spinner — no placeholder text — until the
-    // server responds.
-    setMessages([]);
-    setLoadingQuestion(true);
+    // Fallback: kinds we don't render directly fall through to the LLM chat.
+    // Track the request id we fired for so a late reply can't land in a
+    // different chat after the user navigates away.
+    const requestId = focused.id;
+    setLoadingQuestionId(requestId);
     fetch('/api/copilot/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message: '',
         mode: 'clarify',
-        clarification_request_id: focused.id,
+        clarification_request_id: requestId,
       }),
     })
       .then((r) => r.json())
       .then((data) => {
         const reply = data?.message ?? data?.reply ?? '...';
-        setMessages([{ role: 'assistant', content: reply }]);
+        setChats((prev) => ({
+          ...prev,
+          [requestId]: [{ role: 'assistant', content: reply }],
+        }));
       })
       .catch(() => {
-        setMessages([{ role: 'assistant', content: '(failed to load question)' }]);
+        setChats((prev) => ({
+          ...prev,
+          [requestId]: [{ role: 'assistant', content: '(failed to load question)' }],
+        }));
       })
-      .finally(() => setLoadingQuestion(false));
+      .finally(() => {
+        setLoadingQuestionId((cur) => (cur === requestId ? null : cur));
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [popupOpen, focused?.id]);
 
@@ -125,33 +138,37 @@ export function ClarificationPopup() {
 
   const send = async () => {
     if (!input.trim() || !focused || sending) return;
+    const requestId = focused.id;
     const userMsg: ChatMsg = { role: 'user', content: input };
-    setMessages((m) => [...m, userMsg]);
-    const trimmed = input;
-    setInput('');
-    setSending(true);
+    const historyAtSend = [...(chats[requestId] ?? []), userMsg];
+    setChats((prev) => ({ ...prev, [requestId]: historyAtSend }));
+    setInputByChat((prev) => ({ ...prev, [requestId]: '' }));
+    setSendingId(requestId);
     try {
       const res = await fetch('/api/copilot/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: trimmed,
+          message: userMsg.content,
           mode: 'clarify',
-          clarification_request_id: focused.id,
-          history: [...messages, userMsg],
+          clarification_request_id: requestId,
+          history: historyAtSend,
         }),
       });
       const data = await res.json();
       const reply = data?.message ?? data?.reply ?? '(no response)';
-      setMessages((m) => [...m, { role: 'assistant', content: reply }]);
+      setChats((prev) => ({
+        ...prev,
+        [requestId]: [...(prev[requestId] ?? historyAtSend), { role: 'assistant', content: reply }],
+      }));
       await refresh();
     } catch {
-      setMessages((m) => [
-        ...m,
-        { role: 'assistant', content: '(failed to send)' },
-      ]);
+      setChats((prev) => ({
+        ...prev,
+        [requestId]: [...(prev[requestId] ?? historyAtSend), { role: 'assistant', content: '(failed to send)' }],
+      }));
     } finally {
-      setSending(false);
+      setSendingId((cur) => (cur === requestId ? null : cur));
     }
   };
 
@@ -251,7 +268,10 @@ export function ClarificationPopup() {
         <div className="flex gap-2">
           <input
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) =>
+              focusedKey &&
+              setInputByChat((prev) => ({ ...prev, [focusedKey]: e.target.value }))
+            }
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
