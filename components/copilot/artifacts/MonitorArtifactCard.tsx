@@ -3,9 +3,7 @@
 
 import { useState } from 'react';
 import { UIArtifact } from '@/types/artifacts';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Check, X, Loader2, Pencil } from 'lucide-react';
+import { Check, X, Loader2, Pencil, Clock, Target, Activity } from 'lucide-react';
 import { ColumnPicker } from '@/components/schedule/ColumnPicker';
 
 interface MonitorArtifactCardProps {
@@ -14,29 +12,29 @@ interface MonitorArtifactCardProps {
   onCancel: (artifactId: string) => void;
 }
 
-const CATEGORY_LABELS: Record<string, { label: string; color: string }> = {
-  pipeline_health: { label: 'Data Pipeline', color: 'bg-blue-500/20 text-blue-400' },
-  dashboard_shield: { label: 'Dashboard', color: 'bg-slate-500/20 text-slate-400' },
-  model_quality: { label: 'Transformation', color: 'bg-amber-500/20 text-amber-400' },
-  data_drift: { label: 'Data Drift', color: 'bg-red-500/20 text-red-400' },
-  custom_watch: { label: 'Custom', color: 'bg-gray-500/20 text-gray-400' },
+const CATEGORY_LABELS: Record<string, { label: string; tint: string }> = {
+  pipeline_health: { label: 'Data Pipeline', tint: 'text-blue-300 bg-blue-500/10' },
+  dashboard_shield: { label: 'Dashboard',    tint: 'text-slate-300 bg-slate-500/10' },
+  model_quality:   { label: 'Transformation', tint: 'text-amber-300 bg-amber-500/10' },
+  data_drift:      { label: 'Data Drift',    tint: 'text-rose-300 bg-rose-500/10' },
+  custom_watch:    { label: 'Custom',        tint: 'text-zinc-300 bg-zinc-500/10' },
 };
 
-const ACTION_LABELS: Record<string, { text: string; color: string }> = {
-  create: { text: 'CREATE', color: 'bg-emerald-500/20 text-emerald-400' },
-  update: { text: 'UPDATE', color: 'bg-blue-500/20 text-blue-400' },
-  delete: { text: 'DELETE', color: 'bg-red-500/20 text-red-400' },
+const ACTION_LABELS: Record<string, { text: string; tint: string }> = {
+  create: { text: 'CREATE', tint: 'text-emerald-300 bg-emerald-500/10' },
+  update: { text: 'UPDATE', tint: 'text-blue-300 bg-blue-500/10' },
+  delete: { text: 'DELETE', tint: 'text-rose-300 bg-rose-500/10' },
 };
 
 const SCHEDULE_OPTIONS = [
-  { value: '*/5 * * * *', label: 'Every 5 min' },
+  { value: '*/5 * * * *',  label: 'Every 5 min' },
   { value: '*/15 * * * *', label: 'Every 15 min' },
   { value: '*/30 * * * *', label: 'Every 30 min' },
-  { value: '0 * * * *', label: 'Hourly' },
-  { value: '0 */2 * * *', label: 'Every 2h' },
-  { value: '0 */6 * * *', label: 'Every 6h' },
+  { value: '0 * * * *',    label: 'Hourly' },
+  { value: '0 */2 * * *',  label: 'Every 2h' },
+  { value: '0 */6 * * *',  label: 'Every 6h' },
   { value: '0 */12 * * *', label: 'Every 12h' },
-  { value: '0 0 * * *', label: 'Daily at midnight' },
+  { value: '0 0 * * *',    label: 'Daily at midnight' },
 ];
 
 function formatCron(cron: string): string {
@@ -55,143 +53,279 @@ function formatCron(cron: string): string {
   return cron;
 }
 
+function prettyMonitorKind(raw: string): string {
+  return raw.replace(/_/g, ' ').toLowerCase().replace(/(^|\s)\S/g, t => t.toUpperCase());
+}
+
+interface FormValues {
+  name: string;
+  schedule: string;
+  monitors: any[];
+  anomalyColumn: string;
+}
+
 export default function MonitorArtifactCard({ artifact, onConfirm, onCancel }: MonitorArtifactCardProps) {
   const { data, action, status } = artifact;
   const actionLabel = ACTION_LABELS[action] || ACTION_LABELS.create;
-  const category = CATEGORY_LABELS[data.watchType] || CATEGORY_LABELS.custom_watch;
-  const isProposed = status === 'proposed';
+  const category    = CATEGORY_LABELS[data.watchType] || CATEGORY_LABELS.custom_watch;
+  const isProposed  = status === 'proposed';
   const isExecuting = status === 'executing';
   const isCompleted = status === 'completed';
-  const isFailed = status === 'failed';
+  const isFailed    = status === 'failed';
   const isCancelled = status === 'cancelled';
 
   const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState(data.name || 'Monitor');
-  const [editSchedule, setEditSchedule] = useState(data.schedule || '0 */6 * * *');
-  const [editColumn, setEditColumn] = useState('');
+  // Single source of truth — both view and edit modes read from this. Clicking
+  // "Done" simply hides the inputs; the display continues to show what the user
+  // picked. Confirm sends this whole object back to the executor.
+  const [form, setForm] = useState<FormValues>(() => ({
+    name: data.name || 'Monitor',
+    schedule: data.schedule || '0 */6 * * *',
+    monitors: Array.isArray(data.monitors) ? data.monitors : [],
+    anomalyColumn: '',
+  }));
 
-  const hasAnomalyMonitor = (data.monitors || []).some(
-    (m: any) => (m.monitor_type || m.monitorType || '').toUpperCase() === 'ANOMALY'
+  const hasAnomalyMonitor = form.monitors.some(
+    (m: any) => (m.monitor_type || m.monitorType || '').toUpperCase() === 'ANOMALY',
   );
 
-  const handleConfirmWithEdits = () => {
-    if (isEditing) {
-      const editedData: Record<string, any> = { ...data, name: editName, schedule: editSchedule };
-      // Inject column into anomaly monitor configs
-      if (editColumn && hasAnomalyMonitor && editedData.monitors) {
-        editedData.monitors = editedData.monitors.map((m: any) => {
-          const mt = (m.monitor_type || m.monitorType || '').toUpperCase();
-          if (mt === 'ANOMALY') {
-            return { ...m, config: { ...(m.config || {}), column: editColumn } };
-          }
-          return m;
-        });
-      }
-      onConfirm(artifact.artifact_id, editedData);
-    } else {
-      onConfirm(artifact.artifact_id);
+  const handleConfirm = () => {
+    const editedData: Record<string, any> = {
+      ...data,
+      name: form.name,
+      schedule: form.schedule,
+      monitors: form.monitors,
+    };
+    if (form.anomalyColumn && hasAnomalyMonitor) {
+      editedData.monitors = editedData.monitors.map((m: any) => {
+        const mt = (m.monitor_type || m.monitorType || '').toUpperCase();
+        return mt === 'ANOMALY'
+          ? { ...m, config: { ...(m.config || {}), column: form.anomalyColumn } }
+          : m;
+      });
     }
+    onConfirm(artifact.artifact_id, editedData);
   };
 
   return (
-    <div className="border border-border rounded-lg p-4 my-2 bg-card">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <Badge className={actionLabel.color}>
-            {actionLabel.text}
-          </Badge>
-          {isEditing ? (
-            <input
-              type="text"
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-              className="font-semibold text-sm bg-transparent border-b border-[var(--subtle-border)] focus:border-[var(--accent)] outline-none px-1 py-0.5 text-[var(--text)]"
-              autoFocus
-            />
-          ) : (
-            <span className="font-semibold text-sm">{data.name || 'Monitor'}</span>
-          )}
-          {data.watchType && (
-            <Badge className={category.color}>
-              {category.label}
-            </Badge>
-          )}
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] my-2 overflow-hidden">
+      {/* HEADER */}
+      <div className="px-4 pt-4 pb-3 border-b border-[var(--border)]/60">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold tracking-wider ${actionLabel.tint}`}>
+                {actionLabel.text}
+              </span>
+              {data.watchType ? (
+                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium ${category.tint}`}>
+                  {category.label}
+                </span>
+              ) : null}
+              <StatusPill
+                isProposed={isProposed}
+                isExecuting={isExecuting}
+                isCompleted={isCompleted}
+                isFailed={isFailed}
+                isCancelled={isCancelled}
+              />
+            </div>
+            {isEditing ? (
+              <input
+                type="text"
+                value={form.name}
+                onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))}
+                className="w-full text-[15px] font-medium bg-transparent border-b border-[var(--border)] focus:border-[var(--text)] outline-none px-0 py-1 text-[var(--text)]"
+                autoFocus
+              />
+            ) : (
+              <h3 className="text-[15px] font-medium text-[var(--text)] leading-tight">
+                {form.name}
+              </h3>
+            )}
+          </div>
+
+          {isProposed ? (
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsEditing(v => !v)}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-inset)]"
+              >
+                <Pencil className="h-3 w-3" />
+                {isEditing ? 'Done' : 'Edit'}
+              </button>
+              <button
+                type="button"
+                onClick={() => onCancel(artifact.artifact_id)}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] text-[var(--muted)] hover:text-rose-300 hover:bg-rose-500/10"
+              >
+                <X className="h-3 w-3" />
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirm}
+                className="inline-flex items-center gap-1 px-3 py-1 rounded-md text-[12px] font-medium text-emerald-200 bg-emerald-500/15 hover:bg-emerald-500/25"
+              >
+                <Check className="h-3 w-3" />
+                Confirm
+              </button>
+            </div>
+          ) : null}
         </div>
-        {isProposed && (
-          <div className="flex gap-2">
-            <Button variant="ghost" size="sm" onClick={() => setIsEditing(!isEditing)}>
-              <Pencil className="h-3.5 w-3.5 mr-1" /> {isEditing ? 'Done' : 'Edit'}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => onCancel(artifact.artifact_id)}>
-              <X className="h-3.5 w-3.5 mr-1" /> Cancel
-            </Button>
-            <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={handleConfirmWithEdits}>
-              <Check className="h-3.5 w-3.5 mr-1" /> Confirm
-            </Button>
-          </div>
-        )}
-        {isExecuting && (
-          <div className="flex items-center gap-2 text-muted-foreground text-sm">
-            <Loader2 className="h-4 w-4 animate-spin" /> Creating...
-          </div>
-        )}
-        {isCompleted && (
-          <Badge className="bg-emerald-500/20 text-emerald-400">
-            <Check className="h-3 w-3 mr-1" /> Created
-          </Badge>
-        )}
-        {isFailed && (
-          <Badge className="bg-red-500/20 text-red-400">
-            <X className="h-3 w-3 mr-1" /> Failed
-          </Badge>
-        )}
-        {isCancelled && (
-          <Badge className="bg-gray-500/20 text-gray-400">
-            <X className="h-3 w-3 mr-1" /> Cancelled
-          </Badge>
-        )}
       </div>
 
-      <div className="text-muted-foreground text-xs space-y-1">
-        <div className="flex items-center gap-3">
-          <code className="text-indigo-400">{data.anchorFqn}</code>
+      {/* META GRID */}
+      <div className="px-4 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 border-b border-[var(--border)]/60 text-[13px]">
+        <MetaRow icon={<Target className="h-3.5 w-3.5" />} label="Target">
+          <code className="text-[12px] text-indigo-300 break-all">{data.anchorFqn || '—'}</code>
+        </MetaRow>
+        <MetaRow icon={<Clock className="h-3.5 w-3.5" />} label="Schedule">
           {isEditing ? (
             <select
-              value={editSchedule}
-              onChange={(e) => setEditSchedule(e.target.value)}
-              className="text-xs bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded px-2 py-1 text-[var(--text)] focus:outline-none focus:border-[var(--accent)]"
+              value={form.schedule}
+              onChange={(e) => setForm(f => ({ ...f, schedule: e.target.value }))}
+              className="text-[12px] bg-[var(--surface-inset)] border border-[var(--border)] rounded-md px-2 py-1 text-[var(--text)] focus:outline-none focus:border-[var(--text)]"
             >
               {SCHEDULE_OPTIONS.map(opt => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
           ) : (
-            data.schedule && <span>{formatCron(data.schedule)}</span>
+            <span className="text-[var(--text)]">
+              {formatCron(form.schedule)}
+              <span className="ml-1.5 text-[11px] text-[var(--muted)] font-mono">
+                {`\`${form.schedule}\``}
+              </span>
+              {data.timezone && data.timezone !== 'UTC' ? (
+                <span className="ml-1.5 text-[11px] text-[var(--muted)]">({data.timezone})</span>
+              ) : null}
+            </span>
           )}
-          {data.timezone && data.timezone !== 'UTC' && <span>({data.timezone})</span>}
+        </MetaRow>
+      </div>
+
+      {/* MONITORS LIST */}
+      <div className="px-4 py-3 space-y-2">
+        <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-[var(--muted)]">
+          <Activity className="h-3 w-3" />
+          {form.monitors.length} {form.monitors.length === 1 ? 'monitor' : 'monitors'}
         </div>
-        {isEditing && hasAnomalyMonitor && data.anchorFqn && (
-          <div className="mt-2">
-            <label className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1 block">Column to monitor for outliers</label>
+        <ul className="space-y-1.5">
+          {form.monitors.map((m: any, i: number) => {
+            const kindRaw = m.monitor_type || m.monitorType || '';
+            const target  = m.target_fqn || m.targetFqn || data.anchorFqn || '';
+            return (
+              <li
+                key={i}
+                className="flex items-baseline gap-3 text-[12.5px] py-1.5 px-2 rounded-md hover:bg-[var(--surface-inset)]/40"
+              >
+                <span className="font-medium text-[var(--text)] min-w-[120px]">
+                  {prettyMonitorKind(kindRaw)}
+                </span>
+                <code className="text-[12px] text-indigo-300/80 truncate" title={target}>
+                  {target}
+                </code>
+                {m.config && Object.keys(m.config).length > 0 ? (
+                  <span className="ml-auto text-[11px] text-[var(--muted)] font-mono">
+                    {summariseConfig(m.config)}
+                  </span>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+
+        {isEditing && hasAnomalyMonitor && data.anchorFqn ? (
+          <div className="mt-3 pt-3 border-t border-[var(--border)]/60">
+            <label className="text-[11px] uppercase tracking-wider text-[var(--muted)] mb-1.5 block">
+              Anomaly column
+            </label>
             <ColumnPicker
               targetFqn={data.anchorFqn}
-              value={editColumn}
-              onChange={setEditColumn}
+              value={form.anomalyColumn}
+              onChange={(col) => setForm(f => ({ ...f, anomalyColumn: col }))}
               numericOnly
-              className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded px-2 py-1.5 text-[12px] text-[var(--text)] focus:outline-none focus:border-[var(--accent)]"
+              className="w-full bg-[var(--surface-inset)] border border-[var(--border)] rounded-md px-2 py-1.5 text-[12px] text-[var(--text)] focus:outline-none focus:border-[var(--text)]"
             />
           </div>
-        )}
-        {data.monitors && data.monitors.length > 0 && (
-          <div className="flex gap-2 flex-wrap mt-1">
-            {data.monitors.map((m: any, i: number) => (
-              <Badge key={i} className="text-xs">
-                {(m.monitor_type || m.monitorType || '').replace(/_/g, ' ').toLowerCase()}
-              </Badge>
-            ))}
-          </div>
-        )}
+        ) : null}
       </div>
     </div>
   );
+}
+
+function StatusPill({
+  isProposed, isExecuting, isCompleted, isFailed, isCancelled,
+}: {
+  isProposed: boolean;
+  isExecuting: boolean;
+  isCompleted: boolean;
+  isFailed: boolean;
+  isCancelled: boolean;
+}) {
+  if (isExecuting) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium text-[var(--muted)] bg-[var(--surface-inset)]">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Creating
+      </span>
+    );
+  }
+  if (isCompleted) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium text-emerald-300 bg-emerald-500/10">
+        <Check className="h-3 w-3" />
+        Created
+      </span>
+    );
+  }
+  if (isFailed) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium text-rose-300 bg-rose-500/10">
+        <X className="h-3 w-3" />
+        Failed
+      </span>
+    );
+  }
+  if (isCancelled) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium text-[var(--muted)] bg-[var(--surface-inset)]">
+        <X className="h-3 w-3" />
+        Cancelled
+      </span>
+    );
+  }
+  if (isProposed) {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium text-amber-300 bg-amber-500/10">
+        Proposed
+      </span>
+    );
+  }
+  return null;
+}
+
+function MetaRow({
+  icon, label, children,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-baseline gap-2 min-w-0">
+      <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-[var(--muted)] shrink-0">
+        {icon}
+        {label}
+      </span>
+      <span className="min-w-0 flex-1">{children}</span>
+    </div>
+  );
+}
+
+function summariseConfig(config: Record<string, any>): string {
+  const entries = Object.entries(config).slice(0, 2);
+  return entries.map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · ');
 }
