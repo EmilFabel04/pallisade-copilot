@@ -44,6 +44,8 @@
   },
   "devDependencies": {
     "@radix-ui/react-slot": "^1.1.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/bcryptjs": "^2.4.6",
     "@types/jest": "^30.0.0",
     "@types/node": "^20",
@@ -55,6 +57,7 @@
     "eslint": "^9",
     "eslint-config-next": "15.5.3",
     "jest": "^30.3.0",
+    "jest-environment-jsdom": "^30.4.1",
     "lucide-react": "^0.460.0",
     "postcss": "^8.4.47",
     "prisma": "^5.22.0",

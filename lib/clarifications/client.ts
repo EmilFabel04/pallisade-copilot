@@ -7,7 +7,7 @@
  * uniform across the popup, the bell, and the SLA editor tag.
  */
 
-import type { ContextRequest } from './types';
+import type { ContextRequest, ContextRequestStatus } from './types';
 
 export async function listContextRequests(pipelineId: string): Promise<ContextRequest[]> {
   const res = await fetch(
@@ -22,4 +22,14 @@ export async function listContextRequests(pipelineId: string): Promise<ContextRe
 export async function dismissContextRequest(id: string): Promise<void> {
   const res = await fetch(`/api/context-requests/${id}/dismiss`, { method: 'POST' });
   if (!res.ok) throw new Error(`dismiss failed: ${res.status}`);
+}
+
+export async function fetchContextRequest(id: string): Promise<{
+  id: string;
+  status: ContextRequestStatus;
+  answer: Record<string, unknown> | null;
+}> {
+  const res = await fetch(`/api/context-requests/${id}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+  return res.json();
 }

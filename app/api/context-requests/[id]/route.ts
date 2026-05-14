@@ -42,6 +42,7 @@ export async function GET(
         resolvedAt: true,
         dismissedUntil: true,
         resolutionId: true,
+        resolution: { select: { answer: true } },
         pipelineStack: { select: { organizationId: true } },
       },
     });
@@ -67,6 +68,7 @@ export async function GET(
       resolved_at: row.resolvedAt ? row.resolvedAt.toISOString() : null,
       dismissed_until: row.dismissedUntil ? row.dismissedUntil.toISOString() : null,
       resolution_id: row.resolutionId,
+      answer: row.resolution?.answer ?? null,
     });
   } catch (err) {
     console.error('[context-requests/[id]] get failed', err);

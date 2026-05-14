@@ -17,6 +17,7 @@ import type { ContextRequest } from '@/lib/clarifications/types';
 
 interface Ctx {
   requests: ContextRequest[];
+  requestsById: Record<string, ContextRequest>;
   refresh: () => Promise<void>;
   popupOpen: boolean;
   openPopup: (focusId?: string) => void;
@@ -72,9 +73,15 @@ export function ClarificationProvider({ children }: { children: React.ReactNode 
 
   const closePopup = useCallback(() => setPopupOpen(false), []);
 
+  const requestsById = useMemo<Record<string, ContextRequest>>(
+    () => Object.fromEntries(requests.map((r) => [r.id, r])),
+    [requests],
+  );
+
   const value = useMemo<Ctx>(
     () => ({
       requests,
+      requestsById,
       refresh,
       popupOpen,
       openPopup,
@@ -82,7 +89,7 @@ export function ClarificationProvider({ children }: { children: React.ReactNode 
       focusedId,
       setFocusedId,
     }),
-    [requests, refresh, popupOpen, openPopup, closePopup, focusedId],
+    [requests, requestsById, refresh, popupOpen, openPopup, closePopup, focusedId],
   );
 
   return <ClarificationCtx.Provider value={value}>{children}</ClarificationCtx.Provider>;
