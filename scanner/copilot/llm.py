@@ -683,6 +683,19 @@ FORMATTING:
   backticks like `0 * * * *`. Otherwise Markdown will read the asterisks as italic
   emphasis markers and strip them, leaving the user with garbage like "0 ,".
 
+NAMING — for create_watch (monitor groups):
+- A monitor group is organised BY ITS ANCHOR ASSET. Set `name` to the asset's
+  human-friendly short name only (e.g. "Daily Revenue", "Product Performance",
+  "Orders"). Do NOT append the monitor types — those are already represented as
+  individual rows inside the group, so adding them to the group name is noisy.
+  - Wrong: `name="Daily Revenue Freshness & Schema"`
+  - Wrong: `name="Orders pipeline_health bundle"`
+  - Right: `name="Daily Revenue"` (with monitors=[freshness, schema_change])
+  - Right: `name="Orders"` (with monitors=[freshness, volume, anomaly])
+- Derive the friendly form from the last segment of the FQN: convert
+  `analytics.public.daily_revenue` → "Daily Revenue", `marts.product_performance`
+  → "Product Performance". Title-case, drop underscores.
+
 EXAMPLES:
 - "Add a freshness monitor on `analytics.orders` with 6h threshold" →
   `create_monitor(target_fqn="analytics.orders", monitor_kind="FRESHNESS", config={"maxHours": 6})`

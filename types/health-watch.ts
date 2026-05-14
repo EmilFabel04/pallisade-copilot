@@ -114,6 +114,11 @@ export type HealthStatus = 'healthy' | 'degraded' | 'at_risk' | 'unhealthy';
 export interface HealthReport {
   healthScore: number;         // 0-100
   healthStatus: HealthStatus;
+  // True once at least one constituent monitor has produced a run. When false,
+  // healthScore/healthStatus are derived from defaults (or a stale persisted
+  // value) and SHOULD NOT be surfaced as a real health badge — render "NEW"
+  // or "No runs yet" instead.
+  hasRun: boolean;
   summary: string;             // e.g. "Executive Revenue is at risk: 2 stale upstream tables"
   directStatus: string;        // "pass"|"fail"|"none"
   upstreamStatus: string;      // "pass"|"fail"|"mixed"|"none"

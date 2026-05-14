@@ -255,6 +255,9 @@ export async function POST(
     const healthReport = {
       healthScore,
       healthStatus,
+      // Persist hasRun so the detail panel can distinguish a real "0 score from
+      // a failed run" from a freshly-created group whose monitors haven't run.
+      hasRun: true,
       summary,
       directStatus: aggregateStatus(directSignals),
       upstreamStatus: aggregateStatus(upstreamSignals),

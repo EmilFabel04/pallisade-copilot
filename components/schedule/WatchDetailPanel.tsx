@@ -112,15 +112,18 @@ function buildFallbackHealthReport(
   const total = watch.monitorCount || detailMonitors.length || 0;
   const pass = watch.passCount ?? 0;
   const warn = watch.warnCount ?? 0;
+  const fail = watch.failCount ?? 0;
+  const errr = (watch as any).errorCount ?? 0;
+  const hasRun = pass + warn + fail + errr > 0;
 
-  // Always recompute from live pass/warn counts when we have monitors.
+  // Always recompute from live pass/warn counts when we have monitors and at
+  // least one has actually run. Without the hasRun gate, a freshly-created
+  // group with `pass=warn=0, total=2` produces score=0 → "Unhealthy" badge
+  // before any run has even fired.
   // The persisted `watch.healthScore` only updates on full "Run All" passes,
-  // so it goes stale whenever an individual monitor reruns — e.g. a group
-  // whose last "Run All" failed everything stays at 0 even after a single
-  // monitor flips back to PASS. The counts in `watch` are computed from
-  // current monitor statuses each time the list is fetched, so they're
-  // always fresh.
-  const score = total > 0
+  // so it goes stale whenever an individual monitor reruns; the live counts
+  // are recomputed from current monitor statuses every fetch.
+  const score = hasRun && total > 0
     ? Math.round(((pass + 0.5 * warn) / total) * 1000) / 10
     : watch.healthScore != null
       ? watch.healthScore
@@ -178,6 +181,7 @@ function buildFallbackHealthReport(
   return {
     healthScore: score,
     healthStatus: healthStatusFromScore(score),
+    hasRun,
     summary,
     directStatus: aggregateStatus(direct),
     upstreamStatus: aggregateStatus(upstream),
@@ -206,9 +210,15 @@ export function WatchDetailPanel({
   // detail rows — the stored report is only refreshed on a full "Run All"
   // and quickly goes stale as individual monitors rerun.
   const hasFreshSignal = (watch.monitorCount ?? 0) > 0 || detailMonitors.length > 0;
+  const fallback = buildFallbackHealthReport(watch, detailMonitors);
+  // When falling back to the stored report (no fresh signal), older blobs
+  // may not carry `hasRun`. They were persisted by the run handler so a run
+  // did happen — backfill from `lastRunAt` to keep the badge gating sound.
   const healthReport: HealthReport = hasFreshSignal
-    ? buildFallbackHealthReport(watch, detailMonitors)
-    : (storedReport || buildFallbackHealthReport(watch, detailMonitors));
+    ? fallback
+    : storedReport
+      ? { ...storedReport, hasRun: storedReport.hasRun ?? !!watch.lastRunAt }
+      : fallback;
   const healthStatus: HealthStatus = healthReport.healthStatus;
   const failureGroups = healthReport.failureGroups || [];
   const coveragePct = watch.coveragePct != null ? Math.round(watch.coveragePct * 100) : null;
@@ -289,9 +299,14 @@ export function WatchDetailPanel({
                   Disabled
                 </span>
               )}
-              {watch.enabled !== false && healthStatus && (
+              {watch.enabled !== false && healthReport.hasRun && (
                 <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium', HEALTH_STATUS_COLORS[healthStatus])}>
                   {HEALTH_STATUS_LABELS[healthStatus]}
+                </span>
+              )}
+              {watch.enabled !== false && !healthReport.hasRun && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--overlay-medium)] text-[var(--muted)]">
+                  NEW
                 </span>
               )}
             </div>
@@ -352,16 +367,18 @@ export function WatchDetailPanel({
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-3">
               <div className="text-[28px] font-bold text-[var(--text)] tabular-nums">
-                {Math.round(healthReport.healthScore)}
+                {healthReport.hasRun ? Math.round(healthReport.healthScore) : '—'}
               </div>
               <div>
                 <p className="text-[13px] font-medium text-[var(--text)]">Health Score</p>
                 <p className="text-[11px] text-[var(--muted)]">
-                  {healthReport.summary}
+                  {healthReport.hasRun
+                    ? healthReport.summary
+                    : 'No runs yet — click Run All to compute health'}
                 </p>
               </div>
             </div>
-            {healthReport.computedAt && (
+            {healthReport.hasRun && healthReport.computedAt && (
               <span className="text-[10px] text-[var(--text-faint)]">
                 {timeAgo(healthReport.computedAt)}
               </span>
@@ -373,12 +390,13 @@ export function WatchDetailPanel({
             <div
               className={cn(
                 'h-full rounded-full transition-all',
+                !healthReport.hasRun ? 'bg-[var(--overlay-medium)]' :
                 healthReport.healthScore >= 90 ? 'bg-emerald-500' :
                 healthReport.healthScore >= 70 ? 'bg-amber-500' :
                 healthReport.healthScore >= 40 ? 'bg-orange-500' :
                 'bg-red-500'
               )}
-              style={{ width: `${Math.min(healthReport.healthScore, 100)}%` }}
+              style={{ width: healthReport.hasRun ? `${Math.min(healthReport.healthScore, 100)}%` : '0%' }}
             />
           </div>
 
