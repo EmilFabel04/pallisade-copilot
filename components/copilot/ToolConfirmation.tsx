@@ -1,10 +1,17 @@
 'use client';
 
+import { AlertTriangle, Check, X } from 'lucide-react';
 import type { PendingConfirmation } from '@/hooks/useStreamingChat';
+import { MonitorConfirmationCard } from './artifacts/MonitorConfirmationCard';
 
 interface ToolConfirmationProps {
   confirmation: PendingConfirmation;
-  onConfirm: () => void;
+  /**
+   * Called when the user approves. Pass `editedArguments` to override what
+   * the LLM proposed (used by the typed monitor preview to send the user's
+   * tweaks back through the existing `pending_tool_call.arguments` wire).
+   */
+  onConfirm: (editedArguments?: Record<string, any>) => void;
   onDeny: () => void;
   isLoading?: boolean;
 }
@@ -16,102 +23,106 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
     'Apply the change plan by creating a GitHub Pull Request with the proposed changes.',
 };
 
+const MONITOR_TOOLS = new Set(['create_monitor', 'update_monitor', 'delete_monitor']);
+
 export function ToolConfirmation({
   confirmation,
   onConfirm,
   onDeny,
   isLoading = false,
 }: ToolConfirmationProps) {
+  // Type-aware preview for monitor write tools — shows a real card with
+  // editable name/schedule/config instead of dumping the raw JSON args.
+  if (MONITOR_TOOLS.has(confirmation.toolName)) {
+    return (
+      <MonitorConfirmationCard
+        toolName={confirmation.toolName}
+        args={confirmation.arguments || {}}
+        onConfirm={onConfirm}
+        onDeny={onDeny}
+        isLoading={isLoading}
+      />
+    );
+  }
+
+  return (
+    <GenericToolConfirmation
+      confirmation={confirmation}
+      onConfirm={() => onConfirm()}
+      onDeny={onDeny}
+      isLoading={isLoading}
+    />
+  );
+}
+
+// Fallback for tools without a dedicated preview (apply_change_plan, etc.).
+// Now uses the same design tokens as the rest of the artefacts UI instead of
+// raw inline styles.
+function GenericToolConfirmation({
+  confirmation,
+  onConfirm,
+  onDeny,
+  isLoading,
+}: {
+  confirmation: PendingConfirmation;
+  onConfirm: () => void;
+  onDeny: () => void;
+  isLoading: boolean;
+}) {
   const description =
     TOOL_DESCRIPTIONS[confirmation.toolName] || confirmation.description;
 
   return (
-    <div
-      style={{
-        border: '1px solid rgba(245, 158, 11, 0.3)',
-        background: 'rgba(245, 158, 11, 0.05)',
-        borderRadius: '12px',
-        padding: '16px',
-        margin: '8px 0',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="#f59e0b"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-          <line x1="12" y1="9" x2="12" y2="13" />
-          <line x1="12" y1="17" x2="12.01" y2="17" />
-        </svg>
-        <span style={{ fontSize: '13px', fontWeight: 600, color: '#f59e0b' }}>
-          Action Requires Confirmation
-        </span>
+    <div className="rounded-xl border border-amber-500/30 bg-[var(--surface)] my-2 overflow-hidden">
+      <div className="px-4 pt-4 pb-3 border-b border-[var(--border)]/60">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1 space-y-2">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold tracking-wider text-amber-200 bg-amber-500/15">
+              <AlertTriangle className="h-3 w-3" />
+              CONFIRM
+            </span>
+            <h3 className="text-[14px] font-medium text-[var(--text)] leading-tight">
+              {confirmation.toolName}
+            </h3>
+            {description ? (
+              <p className="text-[12.5px] text-[var(--muted)]">{description}</p>
+            ) : null}
+          </div>
+
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={isLoading}
+            className="inline-flex items-center gap-1 px-3 py-1 rounded-md text-[12px] font-medium text-emerald-100 bg-emerald-500/20 hover:bg-emerald-500/30 disabled:opacity-50 shrink-0"
+          >
+            <Check className="h-3 w-3" />
+            {isLoading ? 'Executing…' : 'Approve'}
+          </button>
+        </div>
       </div>
 
-      <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
-        {description}
-      </p>
-
-      {confirmation.arguments && Object.keys(confirmation.arguments).length > 0 && (
-        <div
-          style={{
-            fontSize: '11px',
-            color: 'var(--muted)',
-            background: 'var(--overlay-bg)',
-            borderRadius: '6px',
-            padding: '8px',
-            marginBottom: '12px',
-            fontFamily: 'monospace',
-            whiteSpace: 'pre-wrap',
-            maxHeight: '120px',
-            overflow: 'auto',
-          }}
-        >
-          <strong>{confirmation.toolName}</strong>
-          {'\n'}
-          {JSON.stringify(confirmation.arguments, null, 2)}
+      {confirmation.arguments && Object.keys(confirmation.arguments).length > 0 ? (
+        <div className="px-4 py-3 border-b border-[var(--border)]/60">
+          <div className="text-[11px] uppercase tracking-wider text-[var(--muted)] mb-1.5">
+            Arguments
+          </div>
+          <pre className="text-[12px] font-mono text-[var(--text)] bg-[var(--surface-inset)] rounded-md px-3 py-2 max-h-[160px] overflow-auto whitespace-pre-wrap">
+            {JSON.stringify(confirmation.arguments, null, 2)}
+          </pre>
         </div>
-      )}
+      ) : null}
 
-      <div style={{ display: 'flex', gap: '8px' }}>
+      <div className="px-4 pb-3 pt-2 flex items-center justify-between gap-3">
+        <span className="text-[11px] uppercase tracking-wider text-[var(--muted)]">
+          Action requires confirmation
+        </span>
         <button
-          onClick={onConfirm}
-          disabled={isLoading}
-          style={{
-            background: 'rgba(16, 185, 129, 0.8)',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '6px',
-            padding: '6px 14px',
-            fontSize: '12px',
-            fontWeight: 600,
-            cursor: isLoading ? 'not-allowed' : 'pointer',
-            opacity: isLoading ? 0.6 : 1,
-          }}
-        >
-          {isLoading ? 'Executing...' : 'Approve & Execute'}
-        </button>
-        <button
+          type="button"
           onClick={onDeny}
           disabled={isLoading}
-          style={{
-            background: 'transparent',
-            color: 'var(--text-tertiary)',
-            border: '1px solid var(--overlay-strong)',
-            borderRadius: '6px',
-            padding: '6px 14px',
-            fontSize: '12px',
-            fontWeight: 500,
-            cursor: isLoading ? 'not-allowed' : 'pointer',
-          }}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] text-[var(--muted)] hover:text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
         >
+          <X className="h-3 w-3" />
           Deny
         </button>
       </div>

@@ -1040,16 +1040,19 @@ function AssistantPageInner() {
     setIsLoading(false);
   }, [streamingMessage, selectedPipelineId, onboardingStatus, clearStreamingMessage]);
 
-  const handleConfirmTool = async () => {
+  const handleConfirmTool = async (editedArguments?: Record<string, any>) => {
     if (!streamingMessage?.pendingConfirmation) return;
     setConfirmationLoading(true);
 
-    // Capture pending tool details before clearing streaming message
+    // Capture pending tool details before clearing streaming message.
+    // editedArguments override what the LLM proposed — used by the typed
+    // monitor confirmation card when the user edits name/schedule/config.
     const pending = streamingMessage.pendingConfirmation;
+    const finalArguments = editedArguments ?? pending.arguments;
 
     // For apply_change_plan, use the direct endpoint (no LLM round-trip)
     if (pending.toolName === 'apply_change_plan') {
-      const planId = pending.arguments?.plan_id as string;
+      const planId = finalArguments?.plan_id as string;
       if (planId) {
         // Finalize partial message WITHOUT the pending apply_change_plan tool call
         // (it would render as a stuck "Executing..." spinner otherwise)
@@ -1073,9 +1076,9 @@ function AssistantPageInner() {
         setIsLoading(false);
         // Pass repo args from the LLM's original tool call if available
         await handleApplyPlan(planId, {
-          repoOwner: pending.arguments?.repo_owner as string | undefined,
-          repoName: pending.arguments?.repo_name as string | undefined,
-          baseBranch: pending.arguments?.base_branch as string | undefined,
+          repoOwner: finalArguments?.repo_owner as string | undefined,
+          repoName: finalArguments?.repo_name as string | undefined,
+          baseBranch: finalArguments?.base_branch as string | undefined,
         });
         return;
       }
@@ -1110,7 +1113,7 @@ function AssistantPageInner() {
           pendingToolCall: {
             toolUseId: pending.toolUseId,
             toolName: pending.toolName,
-            arguments: pending.arguments,
+            arguments: finalArguments,
           },
         },
       );
