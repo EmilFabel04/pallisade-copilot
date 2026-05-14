@@ -1433,6 +1433,65 @@ async def discover_sla_profile(
     )
 
 
+def _resolve_volume_timestamp(plan: Any, answers: Dict[str, Any]) -> Optional[str]:
+    """Pick the timestamp column for volume computation.
+
+    Precedence: any answer carrying a 'column' key, else plan.volume_timestamp_pick.column.
+    """
+    for value in answers.values():
+        if isinstance(value, dict) and value.get("column"):
+            return value["column"]
+    pick = plan.volume_timestamp_pick or {}
+    return pick.get("column")
+
+
+def compute_sla(
+    plan: Any,
+    adapter: Any,
+    *,
+    answers: Optional[Dict[str, Any]] = None,
+    pipeline_stack_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
+) -> DiscoveryResult:
+    """Phase 2: run dimension SQL using the analyzed plan + user answers.
+
+    Takes an ``AnalysisPlan`` (from ``analyze_sla``) and a ``{request_id: answer}``
+    dict produced by the clarification engine, then runs the actual dimension
+    computations against the warehouse.
+    """
+    if plan.unsupported:
+        return DiscoveryResult(
+            node_fqn=plan.table_fqn,
+            warehouse_ancestor_fqn=plan.warehouse_ancestor_fqn,
+            unsupported=True,
+            skipped_reason=plan.skipped_reason,
+        )
+
+    chosen_ts = _resolve_volume_timestamp(plan, answers or {})
+    metadata = {"row_count": plan.row_count} if plan.row_count is not None else None
+
+    volume = _compute_volume(
+        adapter,
+        plan.table_fqn,
+        metadata=metadata,
+        timestamp_column=chosen_ts,
+    )
+    freshness = _compute_freshness(adapter, plan.table_fqn, metadata=metadata)
+    schema = _compute_schema(adapter, plan.table_fqn)
+    quality = _compute_quality(adapter, plan.table_fqn)
+    uniqueness = _compute_uniqueness(adapter, plan.table_fqn)
+
+    return DiscoveryResult(
+        node_fqn=plan.table_fqn,
+        warehouse_ancestor_fqn=plan.warehouse_ancestor_fqn,
+        freshness=freshness,
+        volume=volume,
+        quality=quality,
+        schema=schema,
+        uniqueness=uniqueness,
+    )
+
+
 async def discover_sla_direct(
     table_fqn: str,
     adapter: Any,
