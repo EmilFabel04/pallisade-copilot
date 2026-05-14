@@ -53,6 +53,34 @@ async def test_create_monitor_rejects_missing_args():
 
 
 @pytest.mark.asyncio
+async def test_create_monitor_includes_stack_id_in_plan_body():
+    """The /api/schedule/plans route requires stackId; our payload must carry it."""
+    ex = _make_executor()
+    fake_plan = {"id": "plan_1", "groups": [{"monitors": [{"id": "mon_1"}]}]}
+    with patch.object(ex, "_call_nextjs", new=AsyncMock(return_value=fake_plan)) as mocked:
+        result = await ex._execute_create_monitor({
+            "target_fqn": "a.b.c", "monitor_kind": "FRESHNESS",
+        })
+    assert result.success
+    body = mocked.await_args.args[1]
+    assert body.get("stackId") == "stack_1"
+
+
+@pytest.mark.asyncio
+async def test_create_monitor_fails_early_when_no_stack_selected():
+    """Without a pipeline_stack_id we'd 400; surface a clear message instead."""
+    ex = _make_executor()
+    ex.context.pipeline_stack_id = None
+    with patch.object(ex, "_call_nextjs", new=AsyncMock()) as mocked:
+        result = await ex._execute_create_monitor({
+            "target_fqn": "a.b.c", "monitor_kind": "FRESHNESS",
+        })
+    assert not result.success
+    assert "pipeline" in (result.error or "").lower()
+    mocked.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_create_monitor_handles_empty_plan_response():
     ex = _make_executor()
     with patch.object(ex, "_call_nextjs", new=AsyncMock(return_value={"id": "plan_1", "groups": []})):

@@ -1123,16 +1123,27 @@ class ToolExecutor:
     # ---- HTTP helpers for 3-step pipeline ----
 
     async def _call_fastapi(self, path: str, body: dict) -> dict:
-        """POST to FastAPI (scanner) endpoint."""
+        """POST to FastAPI (scanner) endpoint with internal-auth + acting-principal."""
         import aiohttp
+        import os
         base = "http://127.0.0.1:8000"
         stack_id = getattr(self.context, 'pipeline_stack_id', '') or ''
         url = f"{base}{path}"
         if stack_id:
             separator = '&' if '?' in url else '?'
             url += f"{separator}stack_id={stack_id}"
+        # Match scanner/api/auth.py headers. Without these the FastAPI
+        # InternalAuthMiddleware 401s every cross-process call.
+        headers = {
+            "Content-Type": "application/json",
+            "X-Internal-Auth": os.environ.get(
+                "SCANNER_SHARED_SECRET", "dev-insecure-secret-do-not-use-in-production",
+            ),
+            "X-Acting-Org": self.context.org_id,
+            "X-Acting-User": getattr(self.context, "user_id", "") or "copilot-system",
+        }
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=body, headers={"Content-Type": "application/json"}) as resp:
+            async with session.post(url, json=body, headers=headers) as resp:
                 if resp.status != 200:
                     error = await resp.text()
                     raise Exception(f"FastAPI {path} failed ({resp.status}): {error}")
@@ -1275,6 +1286,14 @@ class ToolExecutor:
         if policies:
             groups = self._merge_policy_into_groups(groups, policies)
 
+        # /api/schedule/plans requires stackId; fail early with a clear message.
+        stack_id = getattr(self.context, "pipeline_stack_id", "") or ""
+        if not stack_id:
+            return ToolResult(
+                success=False,
+                error="No pipeline selected. Ask the user to pick a pipeline before creating monitors.",
+            )
+
         try:
             # Step 3: Create plan
             result = await self._call_nextjs("/api/schedule/plans", {
@@ -1286,6 +1305,7 @@ class ToolExecutor:
                 "schedule": data.get("schedule", "0 * * * *"),
                 "timezone": data.get("timezone", "UTC"),
                 "groups": groups,
+                "stackId": stack_id,
             })
         except Exception as e:
             logger.error(f"[CreateMonitor] Plan creation failed: {e}")
@@ -1321,6 +1341,15 @@ class ToolExecutor:
         if not target_fqn or not monitor_kind:
             return ToolResult(success=False, error="target_fqn and monitor_kind are required")
 
+        # /api/schedule/plans requires stackId; fail early with a clear message
+        # rather than letting Next.js 400 with a generic "stackId is required".
+        stack_id = getattr(self.context, "pipeline_stack_id", "") or ""
+        if not stack_id:
+            return ToolResult(
+                success=False,
+                error="No pipeline selected. Ask the user to pick a pipeline before creating a monitor.",
+            )
+
         node_id = self._resolve_fqn_to_node_id(target_fqn)
         groups = [{
             "anchor_name": target_fqn.split(".")[-1],
@@ -1349,6 +1378,7 @@ class ToolExecutor:
                 "schedule": schedule,
                 "timezone": "UTC",
                 "groups": groups,
+                "stackId": stack_id,
             })
         except Exception as e:
             return ToolResult(success=False, error=f"Monitor creation failed: {e}")
