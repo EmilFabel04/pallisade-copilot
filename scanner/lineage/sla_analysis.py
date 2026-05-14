@@ -77,11 +77,18 @@ def analyze_sla(
     *,
     pipeline_stack_id: Optional[str] = None,
     organization_id: Optional[str] = None,
+    prior_answers: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> AnalyzeResult:
     """Run phase 1: pick timestamp candidates, snapshot schema, emit clarifications.
 
     No warehouse-side aggregation runs here. Volume SQL, freshness probes,
     quality checks, and uniqueness checks all defer to ``compute_sla``.
+
+    ``prior_answers`` is a dict keyed by clarification kind (e.g.
+    ``timestamp_choice``) whose value is the prior answer payload — used to
+    short-circuit asking the user a question they have already answered for
+    this scope. The caller (Next.js proxy) looks these up from
+    ``ContextResolution.answer`` before invoking analyze.
     """
     columns = list(adapter.get_columns(table_fqn) or [])
     if not columns:
@@ -117,14 +124,29 @@ def analyze_sla(
         ]
     }
 
-    pick_dict: Optional[Dict[str, Any]] = (
-        {
-            "column": pick.column,
-            "confidence": pick.confidence,
-        }
-        if pick.column is not None
-        else None
+    # If the caller supplied a prior answer for this scope, use it as the
+    # picker's choice — no need to re-ask the user a question they've already
+    # answered. The clarification emit is skipped, the plan goes out as ready.
+    prior_ts_answer = (prior_answers or {}).get("timestamp_choice") or {}
+    prior_ts_column = (
+        prior_ts_answer.get("column") if isinstance(prior_ts_answer, dict) else None
     )
+
+    if prior_ts_column:
+        pick_dict: Optional[Dict[str, Any]] = {
+            "column": prior_ts_column,
+            "confidence": 1.0,  # user-confirmed
+            "source": "prior_answer",
+        }
+    else:
+        pick_dict = (
+            {
+                "column": pick.column,
+                "confidence": pick.confidence,
+            }
+            if pick.column is not None
+            else None
+        )
 
     candidates = [
         {
@@ -149,7 +171,8 @@ def analyze_sla(
     clarification_ids: List[str] = []
 
     needs_clarification = (
-        pipeline_stack_id is not None
+        prior_ts_column is None
+        and pipeline_stack_id is not None
         and pick.column is not None
         and pick.confidence < _get_confidence_threshold()
     )
@@ -200,11 +223,15 @@ def analyze_sla_bulk(
     *,
     pipeline_stack_id: Optional[str] = None,
     organization_id: Optional[str] = None,
+    prior_answers_by_table: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None,
 ) -> List[AnalyzeResult]:
     """Bulk analyze: run phase 1 for multiple tables.
 
     Simple loop wrapper — takes a list of (table_fqn, platform_key) tuples
     and returns a list of AnalyzeResults, one per node.
+
+    ``prior_answers_by_table`` is keyed by table FQN; the inner dict matches
+    the ``prior_answers`` arg on ``analyze_sla``.
     """
     results: List[AnalyzeResult] = []
     for table_fqn, platform in nodes:
@@ -230,6 +257,7 @@ def analyze_sla_bulk(
                 adapter=adapter,
                 pipeline_stack_id=pipeline_stack_id,
                 organization_id=organization_id,
+                prior_answers=(prior_answers_by_table or {}).get(table_fqn),
             )
         )
     return results

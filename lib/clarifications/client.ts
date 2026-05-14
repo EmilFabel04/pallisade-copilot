@@ -9,11 +9,15 @@
 
 import type { ContextRequest, ContextRequestStatus } from './types';
 
-export async function listContextRequests(pipelineId: string): Promise<ContextRequest[]> {
-  const res = await fetch(
-    `/api/context-requests?pipeline_stack_id=${encodeURIComponent(pipelineId)}`,
-    { cache: 'no-store' },
-  );
+export async function listContextRequests(
+  pipelineId: string,
+  statuses: ContextRequestStatus[] = ['open', 'answered'],
+): Promise<ContextRequest[]> {
+  const qs = new URLSearchParams({
+    pipeline_stack_id: pipelineId,
+    status: statuses.join(','),
+  });
+  const res = await fetch(`/api/context-requests?${qs.toString()}`, { cache: 'no-store' });
   if (!res.ok) throw new Error(`list failed: ${res.status}`);
   const json = await res.json();
   return Array.isArray(json?.items) ? (json.items as ContextRequest[]) : [];

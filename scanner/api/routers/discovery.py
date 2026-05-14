@@ -80,6 +80,10 @@ class AnalyzeDiscoveryRequest(BaseModel):
     credentials: Dict[str, Any] = Field(..., description="Warehouse connection credentials")
     stackId: Optional[str] = Field(None, description="Pipeline stack id; required for clarification emits")
     organizationId: Optional[str] = Field(None, description="Caller's organization id")
+    priorAnswers: Optional[Dict[str, Dict[str, Any]]] = Field(
+        default=None,
+        description="Prior clarification answers keyed by kind (e.g. timestamp_choice). When supplied, analyze uses them instead of re-asking.",
+    )
 
 
 class AnalyzeDiscoveryResponse(BaseModel):
@@ -108,6 +112,10 @@ class AnalyzeBulkDiscoveryRequest(BaseModel):
     credentials: Dict[str, Any] = Field(..., description="Warehouse connection credentials")
     stackId: Optional[str] = Field(None)
     organizationId: Optional[str] = Field(None)
+    priorAnswersByTable: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = Field(
+        default=None,
+        description="Prior clarification answers keyed by table FQN, then by clarification kind.",
+    )
 
 
 class AnalyzeBulkDiscoveryResponse(BaseModel):
@@ -645,6 +653,7 @@ async def analyze_sla_route(request: AnalyzeDiscoveryRequest):
             adapter=adapter,
             pipeline_stack_id=request.stackId,
             organization_id=request.organizationId,
+            prior_answers=request.priorAnswers,
         )
     except Exception as e:
         logger.error("[SLA Discovery] Analyze failed for %s: %s", request.tableFqn, e)
@@ -811,6 +820,7 @@ async def analyze_bulk_sla_route(request: AnalyzeBulkDiscoveryRequest):
                     adapter=adapter,
                     pipeline_stack_id=request.stackId,
                     organization_id=request.organizationId,
+                    prior_answers=(request.priorAnswersByTable or {}).get(fqn),
                 )
                 return AnalyzeDiscoveryResponse(
                     status=result.status,

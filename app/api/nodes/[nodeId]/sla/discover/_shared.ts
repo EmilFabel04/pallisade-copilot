@@ -65,3 +65,38 @@ export async function resolveOrganizationId(userEmail: string): Promise<string |
   });
   return userRow?.organizationId ?? undefined;
 }
+
+/**
+ * Look up prior clarification answers for the given (stack, table) pair so a
+ * second discovery run doesn't re-ask the same questions. Returns a flat dict
+ * keyed by clarification kind — e.g. {timestamp_choice: {column: "loaded_at"}}.
+ *
+ * Currently scoped to `timestamp_choice` because that's the only kind discovery
+ * emits today. Add other kinds here when they're introduced.
+ */
+export async function findPriorAnswers(
+  stackId: string,
+  tableFqn: string,
+): Promise<Record<string, Record<string, unknown>>> {
+  const answered = await prisma.contextRequest.findMany({
+    where: {
+      pipelineStackId: stackId,
+      scopeRef: tableFqn,
+      status: 'answered',
+      kind: { in: ['timestamp_choice'] },
+    },
+    orderBy: { resolvedAt: 'desc' },
+    select: {
+      kind: true,
+      resolution: { select: { answer: true } },
+    },
+  });
+
+  const byKind: Record<string, Record<string, unknown>> = {};
+  for (const row of answered) {
+    if (byKind[row.kind]) continue; // first (most recent) wins
+    const ans = row.resolution?.answer as Record<string, unknown> | null | undefined;
+    if (ans) byKind[row.kind] = ans;
+  }
+  return byKind;
+}

@@ -45,12 +45,17 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Pipeline stack not found' }, { status: 404 });
     }
 
-    const status = sp.get('status') || 'open';
-    if (!VALID_STATUSES.has(status)) {
-      return NextResponse.json(
-        { error: `invalid status; expected one of ${[...VALID_STATUSES].join(', ')}` },
-        { status: 400 },
-      );
+    // Accept comma-separated list (e.g. "open,answered") so callers polling
+    // for transitions (open → answered) can fetch both in one round-trip.
+    const rawStatus = sp.get('status') || 'open';
+    const statuses = rawStatus.split(',').map((s) => s.trim()).filter(Boolean);
+    for (const s of statuses) {
+      if (!VALID_STATUSES.has(s)) {
+        return NextResponse.json(
+          { error: `invalid status; expected one of ${[...VALID_STATUSES].join(', ')}` },
+          { status: 400 },
+        );
+      }
     }
 
     const limitRaw = Number(sp.get('limit') ?? DEFAULT_LIMIT);
@@ -60,7 +65,10 @@ export async function GET(request: NextRequest) {
     );
 
     const rows = await prisma.contextRequest.findMany({
-      where: { pipelineStackId, status },
+      where: {
+        pipelineStackId,
+        status: statuses.length === 1 ? statuses[0] : { in: statuses },
+      },
       orderBy: { createdAt: 'desc' },
       take: limit,
       select: {

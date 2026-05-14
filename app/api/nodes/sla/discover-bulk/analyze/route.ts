@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { scannerClient } from '@/lib/scanner-client';
 import {
+  findPriorAnswers,
   resolveOrganizationId,
   resolveWarehouseCredentials,
 } from '@/app/api/nodes/[nodeId]/sla/discover/_shared';
@@ -38,6 +39,16 @@ export async function POST(request: NextRequest) {
     }
 
     const organizationId = await resolveOrganizationId(session.user.email);
+
+    // Look up any prior answered clarifications for each table so we don't
+    // re-ask the user. Keyed by FQN → kind → answer payload.
+    const priorAnswersByTable: Record<string, Record<string, Record<string, unknown>>> = {};
+    for (const n of nodes) {
+      if (n.tableFqn) {
+        priorAnswersByTable[n.tableFqn] = await findPriorAnswers(stackId, n.tableFqn);
+      }
+    }
+
     const allResults: any[] = [];
 
     for (const [platform, tableFqns] of Object.entries(byPlatform)) {
@@ -67,10 +78,24 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
+      const priorForBatch: Record<string, Record<string, Record<string, unknown>>> = {};
+      for (const fqn of tableFqns) {
+        if (priorAnswersByTable[fqn] && Object.keys(priorAnswersByTable[fqn]).length > 0) {
+          priorForBatch[fqn] = priorAnswersByTable[fqn];
+        }
+      }
+
       const res = await scannerClient.fetch(session, '/api/v1/discovery/analyze-bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform, tableFqns, credentials, stackId, organizationId }),
+        body: JSON.stringify({
+          platform,
+          tableFqns,
+          credentials,
+          stackId,
+          organizationId,
+          priorAnswersByTable: priorForBatch,
+        }),
         signal: AbortSignal.timeout(120000),
       });
 

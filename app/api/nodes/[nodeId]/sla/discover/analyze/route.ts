@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { scannerClient } from '@/lib/scanner-client';
-import { resolveOrganizationId, resolveWarehouseCredentials } from '../_shared';
+import { findPriorAnswers, resolveOrganizationId, resolveWarehouseCredentials } from '../_shared';
 
 // POST /api/nodes/[nodeId]/sla/discover/analyze — Phase 1 of two-phase discovery
 export async function POST(
@@ -39,11 +39,19 @@ export async function POST(
     }
 
     const organizationId = await resolveOrganizationId(session.user.email);
+    const priorAnswers = await findPriorAnswers(stackId, tableFqn);
 
     const res = await scannerClient.fetch(session, '/api/v1/discovery/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platform, tableFqn, credentials, stackId, organizationId }),
+      body: JSON.stringify({
+        platform,
+        tableFqn,
+        credentials,
+        stackId,
+        organizationId,
+        priorAnswers,
+      }),
       signal: AbortSignal.timeout(60000),
     });
 
