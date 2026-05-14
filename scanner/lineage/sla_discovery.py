@@ -1364,72 +1364,22 @@ async def discover_sla_profile(
     pipeline_stack_id: Optional[str] = None,
     organization_id: Optional[str] = None,
 ) -> DiscoveryResult:
-    """Build an SLA profile for *node* by querying the actual table data.
+    """DEPRECATED — wrapper around analyze_sla_profile + compute_sla_profile."""
+    try:
+        from lineage.sla_analysis import analyze_sla_profile
+    except ImportError:
+        from scanner.lineage.sla_analysis import analyze_sla_profile
 
-    Queries the warehouse directly for:
-    - Freshness: MAX(timestamp_col) or table metadata
-    - Volume: row count
-    - Quality: per-column null rates
-    - Schema: column structure and types
-
-    When ``pipeline_stack_id`` and ``organization_id`` are provided, low-
-    confidence picks (currently the volume timestamp column) trigger a
-    ``timestamp_choice`` ContextRequest creation in Next.js so the user can
-    disambiguate. Without them, the clarification path is a no-op.
-    """
-    ancestor = _find_warehouse_ancestor(node, graph)
-    if ancestor is None:
-        return DiscoveryResult(
-            node_fqn=node.fqn,
-            unsupported=True,
-            skipped_reason="No warehouse ancestor found in lineage graph",
-        )
-
-    table_fqn = ancestor.fqn
-    logger.info("[SLA Discovery] Profiling %s (ancestor: %s)", node.fqn, table_fqn)
-
-    # Step 1: Get metadata (row_count + freshness) from system tables — instant
-    metadata = _get_table_metadata(adapter, table_fqn)
-    logger.info("[SLA Discovery] %s: metadata=%s", table_fqn, metadata)
-
-    # Step 2: Compute dimensions from metadata (no table scans)
-    freshness = _compute_freshness(adapter, table_fqn, metadata=metadata)
-    volume = _compute_volume(
-        adapter,
-        table_fqn,
-        metadata=metadata,
+    analysis = analyze_sla_profile(
+        node, graph, adapter,
         pipeline_stack_id=pipeline_stack_id,
         organization_id=organization_id,
     )
-    schema = _compute_schema(adapter, table_fqn)
-
-    # Step 3: Quality — single-pass null rate scan across all columns
-    quality = _compute_quality(adapter, table_fqn)
-
-    # Step 4: Uniqueness — approximate distinct count on PK columns
-    uniqueness = _compute_uniqueness(adapter, table_fqn)
-
-    dimensions = [freshness, volume, quality, schema, uniqueness]
-    discovered = sum(1 for x in dimensions if x is not None and x.get("enabled", True))
-    logger.info(
-        "[SLA Discovery] %s: %d/5 dimensions discovered (freshness=%s volume=%s quality=%s schema=%s uniqueness=%s)",
-        table_fqn,
-        discovered,
-        "yes" if freshness else "no",
-        "yes" if volume else "no",
-        "yes" if quality else "no",
-        "yes" if schema else "no",
-        "yes" if uniqueness and uniqueness.get("enabled") else "no",
-    )
-
-    return DiscoveryResult(
-        node_fqn=node.fqn,
-        warehouse_ancestor_fqn=table_fqn,
-        freshness=freshness,
-        volume=volume,
-        quality=quality,
-        schema=schema,
-        uniqueness=uniqueness,
+    return compute_sla_profile(
+        analysis.plan, graph, adapter,
+        answers={},
+        pipeline_stack_id=pipeline_stack_id,
+        organization_id=organization_id,
     )
 
 
@@ -1555,49 +1505,32 @@ async def discover_sla_direct(
     pipeline_stack_id: Optional[str] = None,
     organization_id: Optional[str] = None,
 ) -> DiscoveryResult:
-    """Discover SLA profile directly from a table FQN — no lineage graph needed.
+    """DEPRECATED — thin wrapper around analyze + compute with empty answers.
 
-    Use this when the caller already knows the warehouse table FQN and has
-    a connected adapter.  Skips the graph ancestor walk entirely.
+    Kept during rollout so legacy callers still work. New callers should call
+    `analyze_sla` followed by `compute_sla` directly so they can surface any
+    `awaiting_clarifications` state to the user. Will be removed once the
+    cutover deploy confirms zero hits to this path.
     """
-    logger.info("[SLA Discovery] Direct profiling %s", table_fqn)
+    # Lazy-import to mirror sla_analysis.py's circular-import workaround.
+    try:
+        from lineage.sla_analysis import analyze_sla
+    except ImportError:
+        from scanner.lineage.sla_analysis import analyze_sla
 
-    metadata = _get_table_metadata(adapter, table_fqn)
-    logger.info("[SLA Discovery] %s: metadata=%s", table_fqn, metadata)
-
-    freshness = _compute_freshness(adapter, table_fqn, metadata=metadata)
-    volume = _compute_volume(
-        adapter,
-        table_fqn,
-        metadata=metadata,
+    logger.info("[SLA Discovery] Direct (deprecated wrapper) profiling %s", table_fqn)
+    analysis = analyze_sla(
+        table_fqn=table_fqn,
+        adapter=adapter,
         pipeline_stack_id=pipeline_stack_id,
         organization_id=organization_id,
     )
-    schema = _compute_schema(adapter, table_fqn)
-    quality = _compute_quality(adapter, table_fqn)
-    uniqueness = _compute_uniqueness(adapter, table_fqn)
-
-    dimensions = [freshness, volume, quality, schema, uniqueness]
-    discovered = sum(1 for x in dimensions if x is not None and x.get("enabled", True))
-    logger.info(
-        "[SLA Discovery] %s: %d/5 dimensions discovered (freshness=%s volume=%s quality=%s schema=%s uniqueness=%s)",
-        table_fqn,
-        discovered,
-        "yes" if freshness else "no",
-        "yes" if volume else "no",
-        "yes" if quality else "no",
-        "yes" if schema else "no",
-        "yes" if uniqueness and uniqueness.get("enabled") else "no",
-    )
-
-    return DiscoveryResult(
-        node_fqn=table_fqn,
-        warehouse_ancestor_fqn=table_fqn,
-        freshness=freshness,
-        volume=volume,
-        quality=quality,
-        schema=schema,
-        uniqueness=uniqueness,
+    return compute_sla(
+        analysis.plan,
+        adapter,
+        answers={},
+        pipeline_stack_id=pipeline_stack_id,
+        organization_id=organization_id,
     )
 
 
@@ -1610,7 +1543,7 @@ async def discover_sla_profiles_bulk(
     pipeline_stack_id: Optional[str] = None,
     organization_id: Optional[str] = None,
 ) -> List[DiscoveryResult]:
-    """Discover SLA profiles for a collection of nodes in priority order."""
+    """DEPRECATED — wrapper that loops over discover_sla_profile."""
     _CRITICALITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
     sorted_nodes = sorted(

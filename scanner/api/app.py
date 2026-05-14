@@ -188,13 +188,6 @@ def create_app() -> FastAPI:
     # scanner/api/routers/context_requests.py for the full contract.
     app.include_router(context_requests_router, prefix="/api/v1", tags=["Clarifications"])
 
-    # Subscribe in-process guesser listeners to the clarification bus so
-    # tentative discoveries get a chance to react to context_resolved events.
-    # Today the SLA listener is a logged no-op pending a background re-run
-    # queue (see scanner/lineage/sla_discovery_listeners.py for the rationale).
-    from scanner.lineage.sla_discovery_listeners import register as _register_sla_clarif_listener
-    _register_sla_clarif_listener()
-
     # Integrations operational API (probe-now, etc.)
     app.include_router(integrations_router, prefix="/api/v1", tags=["Integrations"])
 
