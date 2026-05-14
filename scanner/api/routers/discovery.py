@@ -73,6 +73,34 @@ class BulkDiscoveryResponse(BaseModel):
     results: list[NodeDiscoveryResponse]
 
 
+class AnalyzeDiscoveryRequest(BaseModel):
+    """Request body for phase 1 (analyze) of two-phase discovery."""
+    platform: str = Field(..., description="Warehouse platform")
+    tableFqn: str = Field(..., description="Fully qualified table name")
+    credentials: Dict[str, Any] = Field(..., description="Warehouse connection credentials")
+    stackId: Optional[str] = Field(None, description="Pipeline stack id; required for clarification emits")
+    organizationId: Optional[str] = Field(None, description="Caller's organization id")
+
+
+class AnalyzeDiscoveryResponse(BaseModel):
+    """Response from phase 1 — the plan and any pending clarifications."""
+    status: str  # "ready" | "awaiting_clarifications"
+    table_fqn: str
+    plan: Dict[str, Any]
+    clarification_ids: list[str]
+
+
+class ComputeDiscoveryRequest(BaseModel):
+    """Request body for phase 2 (compute) of two-phase discovery."""
+    platform: str = Field(..., description="Warehouse platform")
+    tableFqn: str = Field(..., description="Fully qualified table name; must match plan.table_fqn")
+    credentials: Dict[str, Any] = Field(..., description="Warehouse connection credentials")
+    plan: Dict[str, Any] = Field(..., description="The AnalysisPlan dict returned by /analyze")
+    answers: Dict[str, Any] = Field(default_factory=dict, description="{request_id: answer} from resolved clarifications")
+    stackId: Optional[str] = None
+    organizationId: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -518,3 +546,159 @@ async def discover_direct_bulk_sla(request: BulkDirectDiscoveryRequest):
 
     results = list(await asyncio.gather(*[_discover_one(fqn) for fqn in request.tableFqns]))
     return BulkDiscoveryResponse(results=results)
+
+
+# ---------------------------------------------------------------------------
+# Two-phase discovery — phase 1: analyze
+# ---------------------------------------------------------------------------
+
+@router.post("/discovery/analyze", response_model=AnalyzeDiscoveryResponse)
+async def analyze_sla_route(request: AnalyzeDiscoveryRequest):
+    """Phase 1: pick timestamps, emit clarifications if needed, return the plan."""
+    try:
+        from lineage.sla_analysis import analyze_sla, plan_to_dict
+    except ImportError:
+        from scanner.lineage.sla_analysis import analyze_sla, plan_to_dict
+
+    platform = request.platform.lower()
+    if platform not in _WAREHOUSE_PLATFORMS:
+        # No adapter at all — return an unsupported plan, status=ready, no clarifications.
+        plan = {
+            "table_fqn": request.tableFqn,
+            "warehouse_ancestor_fqn": None,
+            "volume_timestamp_pick": None,
+            "volume_timestamp_candidates": [],
+            "schema_snapshot": {"columns": []},
+            "row_count": None,
+            "unsupported": True,
+            "skipped_reason": f"Platform '{platform}' is not supported for discovery",
+        }
+        return AnalyzeDiscoveryResponse(
+            status="ready",
+            table_fqn=request.tableFqn,
+            plan=plan,
+            clarification_ids=[],
+        )
+
+    adapter = _create_warehouse_adapter(platform, request.credentials)
+    if not adapter:
+        plan = {
+            "table_fqn": request.tableFqn,
+            "warehouse_ancestor_fqn": None,
+            "volume_timestamp_pick": None,
+            "volume_timestamp_candidates": [],
+            "schema_snapshot": {"columns": []},
+            "row_count": None,
+            "unsupported": True,
+            "skipped_reason": f"Could not create adapter for platform '{platform}'",
+        }
+        return AnalyzeDiscoveryResponse(
+            status="ready",
+            table_fqn=request.tableFqn,
+            plan=plan,
+            clarification_ids=[],
+        )
+
+    try:
+        adapter.connect()
+    except Exception as e:
+        logger.warning("[SLA Discovery] Analyze: failed to connect %s: %s", platform, e)
+        raise HTTPException(status_code=503, detail=f"Failed to connect to {platform}: {e}")
+
+    try:
+        result = analyze_sla(
+            table_fqn=request.tableFqn,
+            adapter=adapter,
+            pipeline_stack_id=request.stackId,
+            organization_id=request.organizationId,
+        )
+    except Exception as e:
+        logger.error("[SLA Discovery] Analyze failed for %s: %s", request.tableFqn, e)
+        raise HTTPException(status_code=500, detail=f"Analyze failed: {e}")
+    finally:
+        try:
+            adapter.disconnect()
+        except Exception:
+            pass
+
+    return AnalyzeDiscoveryResponse(
+        status=result.status,
+        table_fqn=result.table_fqn,
+        plan=plan_to_dict(result.plan),
+        clarification_ids=list(result.clarification_ids),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Two-phase discovery — phase 2: compute
+# ---------------------------------------------------------------------------
+
+@router.post("/discovery/compute", response_model=NodeDiscoveryResponse)
+async def compute_sla_route(request: ComputeDiscoveryRequest):
+    """Phase 2: compute SLAs from plan + user answers."""
+    try:
+        from lineage.sla_analysis import plan_from_dict
+        from lineage.sla_discovery import compute_sla
+    except ImportError:
+        from scanner.lineage.sla_analysis import plan_from_dict
+        from scanner.lineage.sla_discovery import compute_sla
+
+    if request.plan.get("table_fqn") != request.tableFqn:
+        raise HTTPException(
+            status_code=400,
+            detail="plan.table_fqn does not match request tableFqn",
+        )
+
+    platform = request.platform.lower()
+    if platform not in _WAREHOUSE_PLATFORMS:
+        return NodeDiscoveryResponse(
+            node_fqn=request.tableFqn,
+            unsupported=True,
+            skipped_reason=f"Platform '{platform}' is not supported for discovery",
+        )
+
+    adapter = _create_warehouse_adapter(platform, request.credentials)
+    if not adapter:
+        return NodeDiscoveryResponse(
+            node_fqn=request.tableFqn,
+            unsupported=True,
+            skipped_reason=f"Could not create adapter for platform '{platform}'",
+        )
+
+    try:
+        adapter.connect()
+    except Exception as e:
+        logger.warning("[SLA Discovery] Compute: failed to connect %s: %s", platform, e)
+        raise HTTPException(status_code=503, detail=f"Failed to connect to {platform}: {e}")
+
+    try:
+        plan = plan_from_dict(request.plan)
+        result = compute_sla(
+            plan,
+            adapter,
+            answers=request.answers,
+            pipeline_stack_id=request.stackId,
+            organization_id=request.organizationId,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("[SLA Discovery] Compute failed for %s: %s", request.tableFqn, e)
+        raise HTTPException(status_code=500, detail=f"Compute failed: {e}")
+    finally:
+        try:
+            adapter.disconnect()
+        except Exception:
+            pass
+
+    return NodeDiscoveryResponse(
+        node_fqn=result.node_fqn,
+        warehouse_ancestor_fqn=result.warehouse_ancestor_fqn,
+        freshness=result.freshness,
+        volume=result.volume,
+        quality=result.quality,
+        schema_profile=result.schema,
+        uniqueness=result.uniqueness,
+        unsupported=result.unsupported,
+        skipped_reason=result.skipped_reason,
+    )
