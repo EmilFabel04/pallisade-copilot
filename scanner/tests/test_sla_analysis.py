@@ -222,3 +222,37 @@ def test_analyze_profile_unsupported_when_no_ancestor():
         )
     assert result.plan.unsupported is True
     assert result.plan.skipped_reason
+
+
+# ---------------------------------------------------------------------------
+# analyze_sla_bulk tests (Task 6)
+# ---------------------------------------------------------------------------
+
+from scanner.lineage.sla_analysis import analyze_sla_bulk  # noqa: E402
+
+
+def test_analyze_bulk_returns_one_result_per_table():
+    adapters = {"bigquery": _adapter_with([_col("loaded_at", "TIMESTAMP")])}
+    nodes = [
+        ("proj.ds.a", "bigquery"),
+        ("proj.ds.b", "bigquery"),
+    ]
+    with patch(
+        "scanner.lineage.sla_analysis._get_confidence_threshold", return_value=0.85
+    ):
+        results = analyze_sla_bulk(
+            nodes, adapters,
+            pipeline_stack_id="s",
+            organization_id="o",
+        )
+    assert len(results) == 2
+    assert {r.table_fqn for r in results} == {"proj.ds.a", "proj.ds.b"}
+
+
+def test_analyze_bulk_marks_unsupported_when_no_adapter():
+    adapters = {}  # no adapters registered
+    nodes = [("proj.ds.a", "bigquery")]
+    results = analyze_sla_bulk(nodes, adapters)
+    assert len(results) == 1
+    assert results[0].plan.unsupported is True
+    assert "bigquery" in (results[0].plan.skipped_reason or "")

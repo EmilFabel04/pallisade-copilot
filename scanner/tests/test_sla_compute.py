@@ -91,3 +91,21 @@ def test_compute_profile_uses_warehouse_ancestor_from_plan():
     )
     result = compute_sla_profile(plan, MagicMock(), _adapter(), answers={})
     assert result.warehouse_ancestor_fqn == "acme.analytics.events"
+
+
+# ---------------------------------------------------------------------------
+# compute_sla_bulk tests (Task 6)
+# ---------------------------------------------------------------------------
+
+from scanner.lineage.sla_discovery import compute_sla_bulk  # noqa: E402
+
+
+def test_compute_bulk_returns_one_result_per_plan():
+    adapters = {"bigquery": _adapter()}
+    plans = [
+        (_plan("proj.ds.a"), "bigquery", {}),
+        (_plan("proj.ds.b"), "bigquery", {}),
+    ]
+    results = compute_sla_bulk(plans, adapters)
+    assert len(results) == 2
+    assert {r.node_fqn for r in results} == {"proj.ds.a", "proj.ds.b"}

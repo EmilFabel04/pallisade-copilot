@@ -1511,6 +1511,43 @@ def compute_sla_profile(
     )
 
 
+def compute_sla_bulk(
+    plans: List[tuple],  # (plan, platform, answers)
+    adapters: Dict[str, Any],
+    *,
+    pipeline_stack_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
+) -> List[DiscoveryResult]:
+    """Bulk compute: run phase 2 for multiple plans.
+
+    Simple loop wrapper — takes a list of (plan, platform_key, answers) tuples
+    and returns a list of DiscoveryResults, one per plan.
+    """
+    results: List[DiscoveryResult] = []
+    for plan, platform, answers in plans:
+        adapter = adapters.get(platform)
+        if adapter is None:
+            results.append(
+                DiscoveryResult(
+                    node_fqn=plan.table_fqn,
+                    warehouse_ancestor_fqn=plan.warehouse_ancestor_fqn,
+                    unsupported=True,
+                    skipped_reason=f"No adapter for platform '{platform}'.",
+                )
+            )
+            continue
+        results.append(
+            compute_sla(
+                plan,
+                adapter,
+                answers=answers,
+                pipeline_stack_id=pipeline_stack_id,
+                organization_id=organization_id,
+            )
+        )
+    return results
+
+
 async def discover_sla_direct(
     table_fqn: str,
     adapter: Any,

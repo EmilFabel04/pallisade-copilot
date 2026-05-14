@@ -194,6 +194,47 @@ def _safe_row_count(adapter: Any, table_fqn: str) -> Optional[int]:
         return None
 
 
+def analyze_sla_bulk(
+    nodes: List[tuple],  # (table_fqn, platform_key)
+    adapters: Dict[str, Any],
+    *,
+    pipeline_stack_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
+) -> List[AnalyzeResult]:
+    """Bulk analyze: run phase 1 for multiple tables.
+
+    Simple loop wrapper — takes a list of (table_fqn, platform_key) tuples
+    and returns a list of AnalyzeResults, one per node.
+    """
+    results: List[AnalyzeResult] = []
+    for table_fqn, platform in nodes:
+        adapter = adapters.get(platform)
+        if adapter is None:
+            plan = AnalysisPlan(
+                table_fqn=table_fqn,
+                warehouse_ancestor_fqn=None,
+                volume_timestamp_pick=None,
+                volume_timestamp_candidates=[],
+                schema_snapshot={"columns": []},
+                row_count=None,
+                unsupported=True,
+                skipped_reason=f"No adapter for platform '{platform}'.",
+            )
+            results.append(
+                AnalyzeResult(table_fqn=table_fqn, plan=plan, status="ready", clarification_ids=[])
+            )
+            continue
+        results.append(
+            analyze_sla(
+                table_fqn=table_fqn,
+                adapter=adapter,
+                pipeline_stack_id=pipeline_stack_id,
+                organization_id=organization_id,
+            )
+        )
+    return results
+
+
 def analyze_sla_profile(
     node: Any,
     graph: Any,
