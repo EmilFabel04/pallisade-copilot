@@ -101,6 +101,36 @@ class ComputeDiscoveryRequest(BaseModel):
     organizationId: Optional[str] = None
 
 
+class AnalyzeBulkDiscoveryRequest(BaseModel):
+    """Request body for phase 1 bulk: analyze multiple tables on the same platform."""
+    platform: str = Field(..., description="Warehouse platform")
+    tableFqns: list[str] = Field(..., description="Table FQNs to analyze", max_length=50)
+    credentials: Dict[str, Any] = Field(..., description="Warehouse connection credentials")
+    stackId: Optional[str] = Field(None)
+    organizationId: Optional[str] = Field(None)
+
+
+class AnalyzeBulkDiscoveryResponse(BaseModel):
+    """Response from /discovery/analyze-bulk — one entry per table."""
+    results: list[AnalyzeDiscoveryResponse]
+
+
+class ComputeBulkItem(BaseModel):
+    """A single (plan, answers) compute item in a bulk compute request."""
+    tableFqn: str
+    plan: Dict[str, Any]
+    answers: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ComputeBulkDiscoveryRequest(BaseModel):
+    """Request body for phase 2 bulk: compute SLAs for multiple prepared plans."""
+    platform: str = Field(..., description="Warehouse platform")
+    credentials: Dict[str, Any] = Field(..., description="Warehouse connection credentials")
+    items: list[ComputeBulkItem] = Field(..., max_length=50)
+    stackId: Optional[str] = None
+    organizationId: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -702,3 +732,207 @@ async def compute_sla_route(request: ComputeDiscoveryRequest):
         unsupported=result.unsupported,
         skipped_reason=result.skipped_reason,
     )
+
+
+# ---------------------------------------------------------------------------
+# Two-phase discovery — phase 1 bulk: analyze-bulk
+# ---------------------------------------------------------------------------
+
+@router.post("/discovery/analyze-bulk", response_model=AnalyzeBulkDiscoveryResponse)
+async def analyze_bulk_sla_route(request: AnalyzeBulkDiscoveryRequest):
+    """Phase 1 bulk — analyze multiple tables, returning per-table plans + clarifications."""
+    try:
+        from lineage.sla_analysis import analyze_sla, plan_to_dict
+    except ImportError:
+        from scanner.lineage.sla_analysis import analyze_sla, plan_to_dict
+
+    platform = request.platform.lower()
+    if platform not in _WAREHOUSE_PLATFORMS:
+        results = [
+            AnalyzeDiscoveryResponse(
+                status="ready",
+                table_fqn=fqn,
+                plan={
+                    "table_fqn": fqn,
+                    "warehouse_ancestor_fqn": None,
+                    "volume_timestamp_pick": None,
+                    "volume_timestamp_candidates": [],
+                    "schema_snapshot": {"columns": []},
+                    "row_count": None,
+                    "unsupported": True,
+                    "skipped_reason": f"Platform '{platform}' is not supported for discovery",
+                },
+                clarification_ids=[],
+            )
+            for fqn in request.tableFqns
+        ]
+        return AnalyzeBulkDiscoveryResponse(results=results)
+
+    # Single shared adapter per bulk call (matches /discovery/direct-bulk pattern).
+    adapter = _create_warehouse_adapter(platform, request.credentials)
+    if not adapter:
+        results = [
+            AnalyzeDiscoveryResponse(
+                status="ready",
+                table_fqn=fqn,
+                plan={
+                    "table_fqn": fqn,
+                    "warehouse_ancestor_fqn": None,
+                    "volume_timestamp_pick": None,
+                    "volume_timestamp_candidates": [],
+                    "schema_snapshot": {"columns": []},
+                    "row_count": None,
+                    "unsupported": True,
+                    "skipped_reason": f"Could not create adapter for platform '{platform}'",
+                },
+                clarification_ids=[],
+            )
+            for fqn in request.tableFqns
+        ]
+        return AnalyzeBulkDiscoveryResponse(results=results)
+
+    try:
+        adapter.connect()
+    except Exception as e:
+        logger.warning("[SLA Discovery] AnalyzeBulk: failed to connect %s: %s", platform, e)
+        raise HTTPException(status_code=503, detail=f"Failed to connect to {platform}: {e}")
+
+    semaphore = asyncio.Semaphore(5)
+
+    async def _analyze_one(fqn: str) -> AnalyzeDiscoveryResponse:
+        async with semaphore:
+            try:
+                result = analyze_sla(
+                    table_fqn=fqn,
+                    adapter=adapter,
+                    pipeline_stack_id=request.stackId,
+                    organization_id=request.organizationId,
+                )
+                return AnalyzeDiscoveryResponse(
+                    status=result.status,
+                    table_fqn=result.table_fqn,
+                    plan=plan_to_dict(result.plan),
+                    clarification_ids=list(result.clarification_ids),
+                )
+            except Exception as e:
+                logger.error("[SLA Discovery] AnalyzeBulk failed for %s: %s", fqn, e)
+                return AnalyzeDiscoveryResponse(
+                    status="ready",
+                    table_fqn=fqn,
+                    plan={
+                        "table_fqn": fqn,
+                        "warehouse_ancestor_fqn": None,
+                        "volume_timestamp_pick": None,
+                        "volume_timestamp_candidates": [],
+                        "schema_snapshot": {"columns": []},
+                        "row_count": None,
+                        "unsupported": True,
+                        "skipped_reason": f"Analyze failed: {e}",
+                    },
+                    clarification_ids=[],
+                )
+
+    try:
+        results = list(await asyncio.gather(*[_analyze_one(fqn) for fqn in request.tableFqns]))
+    finally:
+        try:
+            adapter.disconnect()
+        except Exception:
+            pass
+
+    return AnalyzeBulkDiscoveryResponse(results=results)
+
+
+# ---------------------------------------------------------------------------
+# Two-phase discovery — phase 2 bulk: compute-bulk
+# ---------------------------------------------------------------------------
+
+@router.post("/discovery/compute-bulk", response_model=BulkDiscoveryResponse)
+async def compute_bulk_sla_route(request: ComputeBulkDiscoveryRequest):
+    """Phase 2 bulk — compute SLAs for prepared plans + their resolved answers."""
+    try:
+        from lineage.sla_analysis import plan_from_dict
+        from lineage.sla_discovery import compute_sla
+    except ImportError:
+        from scanner.lineage.sla_analysis import plan_from_dict
+        from scanner.lineage.sla_discovery import compute_sla
+
+    # Plan/FQN consistency check
+    for item in request.items:
+        if item.plan.get("table_fqn") != item.tableFqn:
+            raise HTTPException(
+                status_code=400,
+                detail=f"plan.table_fqn does not match tableFqn for {item.tableFqn}",
+            )
+
+    platform = request.platform.lower()
+    if platform not in _WAREHOUSE_PLATFORMS:
+        results = [
+            NodeDiscoveryResponse(
+                node_fqn=item.tableFqn,
+                unsupported=True,
+                skipped_reason=f"Platform '{platform}' is not supported for discovery",
+            )
+            for item in request.items
+        ]
+        return BulkDiscoveryResponse(results=results)
+
+    adapter = _create_warehouse_adapter(platform, request.credentials)
+    if not adapter:
+        results = [
+            NodeDiscoveryResponse(
+                node_fqn=item.tableFqn,
+                unsupported=True,
+                skipped_reason=f"Could not create adapter for platform '{platform}'",
+            )
+            for item in request.items
+        ]
+        return BulkDiscoveryResponse(results=results)
+
+    try:
+        adapter.connect()
+    except Exception as e:
+        logger.warning("[SLA Discovery] ComputeBulk: failed to connect %s: %s", platform, e)
+        raise HTTPException(status_code=503, detail=f"Failed to connect to {platform}: {e}")
+
+    semaphore = asyncio.Semaphore(5)
+
+    async def _compute_one(item: ComputeBulkItem) -> NodeDiscoveryResponse:
+        async with semaphore:
+            try:
+                plan = plan_from_dict(item.plan)
+                result = compute_sla(
+                    plan,
+                    adapter,
+                    answers=item.answers,
+                    pipeline_stack_id=request.stackId,
+                    organization_id=request.organizationId,
+                )
+                return NodeDiscoveryResponse(
+                    node_fqn=result.node_fqn,
+                    warehouse_ancestor_fqn=result.warehouse_ancestor_fqn,
+                    freshness=result.freshness,
+                    volume=result.volume,
+                    quality=result.quality,
+                    schema_profile=result.schema,
+                    uniqueness=result.uniqueness,
+                    unsupported=result.unsupported,
+                    skipped_reason=result.skipped_reason,
+                )
+            except Exception as e:
+                logger.error("[SLA Discovery] ComputeBulk failed for %s: %s", item.tableFqn, e)
+                return NodeDiscoveryResponse(
+                    node_fqn=item.tableFqn,
+                    unsupported=True,
+                    skipped_reason=f"Compute failed: {e}",
+                )
+
+    try:
+        results = list(await asyncio.gather(*[_compute_one(it) for it in request.items]))
+    finally:
+        try:
+            adapter.disconnect()
+        except Exception:
+            pass
+
+    return BulkDiscoveryResponse(results=results)

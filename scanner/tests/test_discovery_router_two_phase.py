@@ -156,3 +156,39 @@ def test_compute_route_rejects_mismatched_plan(client, monkeypatch):
     r = client.post("/api/v1/discovery/compute", json=body)
     assert r.status_code == 400, r.text
     assert "does not match" in r.json().get("detail", "")
+
+
+def test_analyze_bulk_route(client, monkeypatch):
+    from scanner.api.routers import discovery as router_mod
+    from scanner.lineage.sla_analysis import AnalysisPlan, AnalyzeResult
+
+    stub_adapter = MagicMock()
+    monkeypatch.setattr(router_mod, "_create_warehouse_adapter", lambda p, c: stub_adapter)
+
+    def fake_analyze(*, table_fqn, **kw):
+        plan = AnalysisPlan(
+            table_fqn=table_fqn,
+            warehouse_ancestor_fqn=None,
+            volume_timestamp_pick={"column": "loaded_at", "confidence": 0.9},
+            volume_timestamp_candidates=[],
+            schema_snapshot={"columns": []},
+            row_count=100,
+            unsupported=False,
+            skipped_reason=None,
+        )
+        return AnalyzeResult(table_fqn, plan, "ready", [])
+
+    monkeypatch.setattr("scanner.lineage.sla_analysis.analyze_sla", fake_analyze)
+
+    r = client.post(
+        "/api/v1/discovery/analyze-bulk",
+        json={
+            "platform": "bigquery",
+            "tableFqns": ["proj.ds.a", "proj.ds.b"],
+            "credentials": {"project_id": "x"},
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["results"]) == 2
+    assert {item["table_fqn"] for item in body["results"]} == {"proj.ds.a", "proj.ds.b"}
