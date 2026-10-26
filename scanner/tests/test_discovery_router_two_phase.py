@@ -1,11 +1,27 @@
 from __future__ import annotations
 
+import importlib
 import sys
 import types
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+def _patch_lineage(monkeypatch, target, value):
+    """Patch `scanner.lineage.<target>` and, when importable, `lineage.<target>`.
+
+    The router tries `from lineage.…` before `from scanner.lineage.…`, so when
+    pytest runs from scanner/ (as CI does) it binds the top-level `lineage`
+    module and a patch on the `scanner.` path alone is never seen.
+    """
+    monkeypatch.setattr(f"scanner.lineage.{target}", value)
+    try:
+        importlib.import_module(f"lineage.{target.rsplit('.', 1)[0]}")
+    except ImportError:
+        return
+    monkeypatch.setattr(f"lineage.{target}", value)
 
 
 def _ensure_scanner_api_routers_discovery():
@@ -111,8 +127,9 @@ def test_analyze_route_returns_ready_for_confident_pick(client, monkeypatch):
     monkeypatch.setattr(router_mod, "_create_warehouse_adapter", fake_create)
 
     # Patch the lazy import target inside the route body:
-    monkeypatch.setattr(
-        "scanner.lineage.sla_analysis.analyze_sla",
+    _patch_lineage(
+        monkeypatch,
+        "sla_analysis.analyze_sla",
         lambda **kw: AnalyzeResult("proj.ds.t", plan, "ready", []),
     )
 
@@ -178,7 +195,7 @@ def test_analyze_bulk_route(client, monkeypatch):
         )
         return AnalyzeResult(table_fqn, plan, "ready", [])
 
-    monkeypatch.setattr("scanner.lineage.sla_analysis.analyze_sla", fake_analyze)
+    _patch_lineage(monkeypatch, "sla_analysis.analyze_sla", fake_analyze)
 
     r = client.post(
         "/api/v1/discovery/analyze-bulk",
@@ -214,8 +231,9 @@ def test_end_to_end_ambiguous_pick_user_overrides(client, monkeypatch):
     )
 
     # Stub analyze_sla so we don't need a real adapter + emit path.
-    monkeypatch.setattr(
-        "scanner.lineage.sla_analysis.analyze_sla",
+    _patch_lineage(
+        monkeypatch,
+        "sla_analysis.analyze_sla",
         lambda **kw: AnalyzeResult("proj.ds.t", plan, "awaiting_clarifications", ["ctx_1"]),
     )
 
@@ -232,7 +250,7 @@ def test_end_to_end_ambiguous_pick_user_overrides(client, monkeypatch):
             volume={"enabled": True, "timeColumn": captured["col"]},
         )
 
-    monkeypatch.setattr("scanner.lineage.sla_discovery.compute_sla", fake_compute)
+    _patch_lineage(monkeypatch, "sla_discovery.compute_sla", fake_compute)
 
     # Stub the adapter factory in the loaded router module (same pattern as the
     # earlier tests in this file).

@@ -3,12 +3,12 @@
 # ===========================================
 
 # FastAPI and server
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-pydantic==2.5.2
-python-multipart==0.0.6
+fastapi==0.128.0
+uvicorn[standard]==0.40.0
+pydantic==2.12.5
+python-multipart==0.0.22
 slowapi>=0.1.9  # Rate limiting
-sse-starlette>=1.6,<3  # Server-Sent Events for streaming SSE endpoints
+sse-starlette>=1.6  # Server-Sent Events for streaming SSE endpoints
 
 # Database connectors
 snowflake-connector-python>=3.5.0
@@ -35,32 +35,28 @@ faker>=22.0.0
 # Machine Learning
 scikit-learn>=1.4.0  # Updated for Python 3.14 compatibility
 
-# Advanced ML - Anomaly Detection & Drift
-pyod>=1.1.0                 # Multivariate anomaly detection (ECOD, IForest, COPOD)
-alibi-detect>=0.11.0        # Distribution drift detection (KSDrift, TabularDrift)
-ydata-profiling>=4.6.0      # Auto-profiling for baseline building
 
 # LLM for Co-Pilot and semantic column classification
 openai>=1.0.0               # GPT-4o for co-pilot, GPT-4o-mini for column classification
 anthropic>=0.39.0           # Claude for co-pilot (alternative)
 
 # SQL parsing for universal lineage
-sqlglot==20.11.0
+sqlglot==28.10.1
 
 # Security and utilities
-cachetools>=5.3,<6
-cryptography==41.0.7
-python-dotenv==1.0.0
+cachetools>=5.3
+cryptography==46.0.4
+python-dotenv==1.2.1
 
 # HTTP and API clients
-httpx==0.25.2
-aiohttp==3.9.1
+httpx==0.28.1
+aiohttp==3.13.3
 
 # YAML parsing (for dbt schema files)
-PyYAML==6.0.1
+PyYAML==6.0.3
 
 # Google auth (for BigQuery)
-google-auth==2.25.0
+google-auth==2.48.0
 
 # Git operations
 GitPython==3.1.40
@@ -69,7 +65,7 @@ GitPython==3.1.40
 paramiko>=3.4.0
 
 # Structured logging
-structlog==23.2.0
+structlog==25.5.0
 
 # Testing
 pytest>=7.4.0
@@ -82,7 +78,7 @@ mcp>=1.0.0
 
 # External MCP servers (installed as packages, spawned as subprocesses)
 mcp-server-bigquery>=0.3.0       # LucasHild/mcp-server-bigquery
-postgres-mcp>=1.0.0              # crystaldba/postgres-mcp
-dbt-mcp>=1.9.0                   # dbt-labs/dbt-mcp
+postgres-mcp>=0.3.0; python_version < "3.14"  # crystaldba/postgres-mcp (pglast has no 3.14 build)
+dbt-mcp>=1.9.0; python_version < "3.14"  # dbt-labs/dbt-mcp (no 3.14 release yet)
 
 # ggshield is installed separately in Dockerfile for latest version
