@@ -2069,6 +2069,7 @@ function LineagePageInner() {
                 const isPlaceholderProfile = request.profileId.startsWith('auto-discovered-') || request.profileId.startsWith('manual-');
                 let res: Response;
                 let count = 0;
+                let assignments: Array<{ nodeFqn?: string }> = [];
 
                 if (isPlaceholderProfile && request.nodeFqns && request.nodeFqns.length > 0) {
                   // Use discovery endpoint to upsert profile + assignment
@@ -2096,7 +2097,8 @@ function LineagePageInner() {
                   });
                   if (res.ok) {
                     const data = await res.json();
-                    count = data.assignments?.length || 0;
+                    assignments = data.assignments || [];
+                    count = assignments.length;
                   }
                 }
 
@@ -2130,7 +2132,7 @@ function LineagePageInner() {
                     // Non-critical — badges still show from assign response
                     const newPolicies = new Map(nodeSLAs);
                     const profileName = (request as any)._profileName || null;
-                    for (const a of data.assignments || []) {
+                    for (const a of assignments) {
                       if (a.nodeFqn) {
                         newPolicies.set(a.nodeFqn, {
                           source: 'direct_profile',
