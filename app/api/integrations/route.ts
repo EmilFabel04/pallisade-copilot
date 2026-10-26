@@ -364,7 +364,7 @@ export async function GET(request: NextRequest) {
     // PolicyAssignment records instead of using the tool-level SourceContract.
     // This gives a representative SLA for the tool's data assets.
     const DATA_ASSET_LAYERS = new Set(['WAREHOUSE', 'TRANSFORMATION']);
-    let childSLAMap = new Map<string, { slaTier: string; freshnessMinutes: number | null; extractionMinutes: number | null }>();
+    const childSLAMap = new Map<string, { slaTier: string; freshnessMinutes: number | null; extractionMinutes: number | null }>();
 
     if (stackId) {
       try {

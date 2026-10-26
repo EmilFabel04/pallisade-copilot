@@ -1056,7 +1056,7 @@ export function SLAEditorPanel({
                   )}
                   {getVal('volumeConfig', 'partialToday') && (
                     <p className="text-[10px] text-[var(--text-faint)]">
-                      Today's bucket excluded from stats (partial day) — re-run discovery tomorrow for a full window.
+                      Today&apos;s bucket excluded from stats (partial day) — re-run discovery tomorrow for a full window.
                     </p>
                   )}
                 </>

@@ -157,7 +157,7 @@ export async function PATCH(
 
     // Build update data
     const existingContext = pipeline.context;
-    let updateData: any = {
+    const updateData: any = {
       onboardingStatus: 'IN_PROGRESS' as OnboardingStatus,
     };
 

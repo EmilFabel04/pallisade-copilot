@@ -75,7 +75,7 @@ export function WarehouseStep({ onComplete, onSkip, onBack, isLoading }: Warehou
         </div>
 
         <p className="text-xs text-[var(--muted)] text-center mt-5">
-          You'll configure connection details in the pipeline settings after setup.
+          You&apos;ll configure connection details in the pipeline settings after setup.
         </p>
 
         <div className="flex gap-3 mt-5">
@@ -99,7 +99,7 @@ export function WarehouseStep({ onComplete, onSkip, onBack, isLoading }: Warehou
         onClick={onSkip}
         className="w-full text-sm text-[var(--muted)] hover:text-[var(--text)] transition-colors py-2"
       >
-        I'll do this later
+        I&apos;ll do this later
       </button>
     </div>
   );

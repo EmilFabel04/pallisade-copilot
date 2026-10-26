@@ -174,7 +174,7 @@ function LoginForm() {
         </div>
 
         <p className="mt-8 text-center text-sm text-[var(--muted)]">
-          Don't have an account?{' '}
+          Don&apos;t have an account?{' '}
           <Link href="/signup" className="text-[var(--accent-2)] hover:underline font-medium">
             Sign up
           </Link>

@@ -179,7 +179,7 @@ export default function NotificationRoutingSettings() {
             <p className="text-[13px] font-medium text-[var(--text)]">Notify on recovery</p>
             <p className="text-[11px] text-[var(--muted)]">
               Send an alert when a monitor recovers (transitions back to PASS after a failure).
-              Only fires if the destination has "Recovered" in its trigger states.
+              Only fires if the destination has &quot;Recovered&quot; in its trigger states.
             </p>
           </div>
         </label>

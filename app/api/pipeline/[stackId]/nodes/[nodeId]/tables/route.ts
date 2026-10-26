@@ -51,7 +51,7 @@ export async function GET(
 
     // Resolve credentials — prefer Integration table, fall back to legacy PipelineNode.config
     let credentials: Record<string, any> = {};
-    let cachedData: Record<string, any> | null = (node.config as any)?._cached || null;
+    const cachedData: Record<string, any> | null = (node.config as any)?._cached || null;
 
     if ((node as any).integrationId && (node as any).integration?.credentials) {
       try {

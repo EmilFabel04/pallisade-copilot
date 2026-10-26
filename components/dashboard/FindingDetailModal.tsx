@@ -813,7 +813,7 @@ export function FindingDetailModal({
                   {businessImpact.businessImpact && (
                     <div className="p-4 rounded-xl bg-amber-500/5 border border-amber-500/20">
                       <h3 className="text-sm font-medium text-amber-400 mb-2">If This Issue Persists:</h3>
-                      <p className="text-[var(--text)] italic">"{businessImpact.businessImpact}"</p>
+                      <p className="text-[var(--text)] italic">&quot;{businessImpact.businessImpact}&quot;</p>
                     </div>
                   )}
                   

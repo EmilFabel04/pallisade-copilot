@@ -239,8 +239,8 @@ export function SuppressedFindings({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <p className="text-xs text-[var(--muted)]">
-                <strong className="text-purple-400">Tip:</strong> Click "Confirm Suppression" to approve the ML's decision, 
-                or "This is a Real Alert" if you think this should be flagged. Your feedback helps improve future scans.
+                <strong className="text-purple-400">Tip:</strong> Click &quot;Confirm Suppression&quot; to approve the ML&apos;s decision, 
+                or &quot;This is a Real Alert&quot; if you think this should be flagged. Your feedback helps improve future scans.
               </p>
             </div>
           </div>

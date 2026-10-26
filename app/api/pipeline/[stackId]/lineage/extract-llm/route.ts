@@ -123,7 +123,7 @@ export async function POST(
     );
     let githubAttachment: Record<string, any> | null = null;
     if (githubNode) {
-      let ghConfig = resolveNodeConfig(githubNode);
+      const ghConfig = resolveNodeConfig(githubNode);
 
       // OAuth tools (GitHub) may not have integrationId on the PipelineNode.
       // The link is stored as _integration_id in the node config instead.

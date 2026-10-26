@@ -44,7 +44,7 @@ export async function POST(
 
     // Use config from request body (for unsaved/new nodes) or resolve from Integration/node
     let credentials: Record<string, any> = {};
-    let toolType = body.toolType || node?.toolType;
+    const toolType = body.toolType || node?.toolType;
 
     if (body.config && Object.keys(body.config).length > 0) {
       credentials = body.config;
