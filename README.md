@@ -7,6 +7,7 @@
 **An AI copilot and reliability layer for data pipelines.**
 Ask questions of your warehouse, trace lineage across the whole stack, and catch broken data before your dashboards do.
 
+[![CI](https://github.com/EmilFabel04/pallisade-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/EmilFabel04/pallisade-copilot/actions/workflows/ci.yml)
 ![Next.js](https://img.shields.io/badge/Next.js_15-000?logo=nextdotjs&logoColor=white)
 ![React](https://img.shields.io/badge/React_19-149eca?logo=react&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178c6?logo=typescript&logoColor=white)
