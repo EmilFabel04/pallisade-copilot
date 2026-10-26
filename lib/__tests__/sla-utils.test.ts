@@ -2,10 +2,9 @@
  * SLA utility tests.
  *
  * To run:
- *   npx vitest run lib/__tests__/sla-utils.test.ts
+ *   npx jest lib/__tests__/sla-utils.test.ts
  */
 
-import { describe, it, expect } from 'vitest';
 import {
   SLA_FIELD_MAP,
   getSLAValueForField,

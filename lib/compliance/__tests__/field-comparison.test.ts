@@ -1,4 +1,3 @@
-import { describe, it, expect } from 'vitest';
 import { compareFieldToBaseline, type ComplianceStatus } from '../field-comparison';
 
 describe('compareFieldToBaseline — numeric lower-is-stricter', () => {

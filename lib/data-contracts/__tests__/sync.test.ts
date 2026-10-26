@@ -1,4 +1,3 @@
-import { describe, it, expect } from 'vitest';
 import { computeGroupContractFromSLAs, findDeviatingNodes } from '../sync';
 
 describe('computeGroupContractFromSLAs', () => {

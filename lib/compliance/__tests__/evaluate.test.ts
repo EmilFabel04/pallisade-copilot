@@ -1,4 +1,3 @@
-import { describe, it, expect } from 'vitest';
 import { evaluateNodeCompliance } from '../evaluate';
 
 describe('evaluateNodeCompliance against tier baseline', () => {

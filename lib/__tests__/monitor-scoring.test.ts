@@ -2,10 +2,9 @@
  * Monitor scoring utility tests.
  *
  * To run:
- *   npx vitest run lib/__tests__/monitor-scoring.test.ts
+ *   npx jest lib/__tests__/monitor-scoring.test.ts
  */
 
-import { describe, it, expect } from 'vitest';
 import {
   computeMonitorHealth,
   computeMonitorCoverage,

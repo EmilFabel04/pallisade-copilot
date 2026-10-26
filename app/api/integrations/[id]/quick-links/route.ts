@@ -9,10 +9,11 @@ import prisma from '@/lib/db';
  * Links are stored in PipelineNode.config.quickLinks or Integration.metadata.quickLinks.
  */
 
-interface QuickLink {
+// A type alias (not an interface) so it's assignable to Prisma's JSON input type.
+type QuickLink = {
   label: string;
   url: string;
-}
+};
 
 // GET — fetch quick links for a source
 export async function GET(

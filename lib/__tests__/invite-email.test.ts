@@ -1,4 +1,3 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { generateInviteHtml, sendInviteEmail } from '../email/invite';
 import type { InviteEmailParams } from '../email/invite';
 
@@ -49,7 +48,7 @@ describe('sendInviteEmail', () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv };
-    vi.restoreAllMocks();
+    jest.restoreAllMocks();
   });
 
   afterEach(() => {
@@ -58,7 +57,7 @@ describe('sendInviteEmail', () => {
 
   it('returns false and warns when RESEND_API_KEY is not set', async () => {
     delete process.env.RESEND_API_KEY;
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const result = await sendInviteEmail(baseParams);
     expect(result).toBe(false);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('RESEND_API_KEY not set'));
@@ -68,13 +67,13 @@ describe('sendInviteEmail', () => {
     process.env.RESEND_API_KEY = 'test-key-123';
     process.env.EMAIL_FROM = 'noreply@test.dev';
 
-    const mockFetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    const mockFetch = jest.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ id: 'email-id' }), { status: 200 }),
     );
 
     const result = await sendInviteEmail(baseParams);
     expect(result).toBe(true);
-    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
 
     const [url, opts] = mockFetch.mock.calls[0];
     expect(url).toBe('https://api.resend.com/emails');
@@ -93,10 +92,10 @@ describe('sendInviteEmail', () => {
 
   it('returns false on Resend API failure', async () => {
     process.env.RESEND_API_KEY = 'test-key-123';
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    jest.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('rate limited', { status: 429 }),
     );
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
     const result = await sendInviteEmail(baseParams);
     expect(result).toBe(false);

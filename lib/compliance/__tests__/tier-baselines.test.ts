@@ -1,4 +1,3 @@
-import { describe, it, expect } from 'vitest';
 import { getTierBaseline, getTierBaselineValue } from '../tier-baselines';
 
 describe('getTierBaseline', () => {
