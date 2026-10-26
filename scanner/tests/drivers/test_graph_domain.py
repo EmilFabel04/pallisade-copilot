@@ -25,7 +25,7 @@ def load_all():
 
 
 # Observability-tool drivers are expected to ship but are not yet implemented.
-# Tracked in TODO.md alongside other planned integrations.
+# Tracked in docs/TODO.md alongside other planned integrations.
 PENDING_DRIVERS = {"BIGEYE", "ELEMENTARY", "MONTE_CARLO", "SODA"}
 
 

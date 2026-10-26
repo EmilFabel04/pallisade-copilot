@@ -33,7 +33,7 @@ Scout is an AI assistant purpose-built for data engineering. It connects directl
 - Save useful responses as persistent artifacts for the team
 - Onboarding flow that teaches Scout about your specific setup
 
-**Supported models:** GPT-5.2, GPT-5.2 Mini, Claude Sonnet, Claude Haiku
+**Supported models:** GPT-5.4, GPT-5.4 Mini, Claude Opus, Claude Sonnet, Claude Haiku
 
 ---
 
@@ -207,7 +207,7 @@ Linux servers via SSH (for certificate, health, and log monitoring)
 ```
 ┌─────────────────────────────────────────────────────┐
 │                   Next.js 15 Frontend               │
-│  React 18 · TypeScript · Tailwind · React Flow      │
+│  React 19 · TypeScript · Tailwind · React Flow      │
 │                                                     │
 │  ┌─────────┐ ┌──────────┐ ┌─────────┐ ┌──────────┐ │
 │  │ Copilot │ │ Lineage  │ │Schedule │ │ Sources  │ │
