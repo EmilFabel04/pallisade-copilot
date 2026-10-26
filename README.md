@@ -21,6 +21,9 @@ Ask questions of your warehouse, trace lineage across the whole stack, and catch
 
 Data teams lose hours stitching together context from the warehouse, dbt, the orchestrator and the BI tool every time a number looks wrong. Pallisade connects to all of them, builds one lineage graph across the stack, and puts **Scout**, an LLM agent with live, read-only access to that graph and your warehouses, in front of it. Scout answers questions with real queries instead of guesses, walks upstream to find root causes, and sets up the monitors that would have caught the problem.
 
+![Scout tracing a failing Airflow → dbt pipeline to its root cause](docs/images/scout-debug.jpg)
+<sub>Scout debugging a failing Airflow → dbt run: it reads the task log, pins the cause on a missing repo mount, and lists the stale downstream models.</sub>
+
 ## What it does
 
 **Scout copilot.** A tool-calling agent (Claude or GPT) with modes for asking, debugging, planning, explaining, suggesting and fixing. It pre-fetches the warehouse schema every turn, so it writes SQL against columns that actually exist. It streams responses over SSE and pauses for approval before anything with side effects, such as opening a GitHub PR.
@@ -28,6 +31,9 @@ Data teams lose hours stitching together context from the warehouse, dbt, the or
 **Cross-stack lineage.** An extraction engine with live adapters for warehouses, dbt, Airflow, Dagster, Prefect, Fivetran, Airbyte and the major BI tools merges everything into one graph. Every edge carries a confidence score and the evidence behind it: the exact SQL statement or manifest entry. Nodes are deduplicated across sources, so the same table seen by dbt and the warehouse resolves to one node.
 
 **Monitors and SLA discovery.** Freshness, volume, schema drift, null rate, uniqueness, distribution, referential integrity and custom-SQL checks, plus TLS, server-health and log monitors over SSH. Pallisade profiles a table to propose thresholds, runs checks on a schedule, and routes alerts to Slack, Teams, PagerDuty or OpsGenie.
+
+![Monitors summary with an AI-written likely cause for each active incident](docs/images/monitors.jpg)
+<sub>Active incidents come with an AI-written likely cause, and one click hands them to Scout for a deeper look.</sub>
 
 **Change plans.** Scout traces the downstream impact of a schema or model change, generates the patches, validates them, and opens a GitHub PR with rollback steps included.
 
